@@ -5,6 +5,16 @@
     "timestamp": true
   },
   "experimental": {
+    "clash_api": {
+      "external_controller": "127.0.0.1:19090",
+      "external_ui": "ui",
+      "external_ui_download_url": "https://gh-proxy.org/https://github.com/MetaCubeX/metacubexd/archive/refs/heads/gh-pages.zip",
+      "external_ui_download_detour": "out-direct",
+      "secret": "",
+      "default_mode": "rule",
+      "access_control_allow_origin": "*",
+      "access_control_allow_private_network": false
+    },
     "cache_file": {
       "enabled": true,
       "store_rdrc": true
@@ -51,6 +61,10 @@
           "baota.me",
           "cloudflare-ip.mofashi.ltd"
         ],
+        "server": "dns-direct"
+      },
+      {
+        "rule_set": ["geosite-private"],
         "server": "dns-direct"
       },
       {
