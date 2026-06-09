@@ -1,46 +1,46 @@
-$ESC = [char]27
+﻿$ESC = [char]27
 $Black = "$ESC[90m"
-$Red = "$ESC[91m"       # [Error]
-$Green = "$ESC[92m"     # [Success]
-$Yellow = "$ESC[93m"    # [Warning]
+$Red = "$ESC[91m"       # [错误]
+$Green = "$ESC[92m"     # [成功]
+$Yellow = "$ESC[93m"    # [警告]
 $Blue = "$ESC[94m"
 $Magenta = "$ESC[95m"
-$Cyan = "$ESC[96m"      # [Notice]
+$Cyan = "$ESC[96m"      # [提示]
 $White = "$ESC[97m"
-$NC = "$ESC[0m"         # No Color
+$NC = "$ESC[0m"         # 无颜色
 
+# 检测是否以管理员身份运行此脚本
 $currentPrincipal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
 $isAdmin = $currentPrincipal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-
 if (-not $isAdmin) {
-    Write-Host "${Red}[Error]${NC} Please run this script as Administrator."
+    Write-Host "${Red}[错误]${NC} 请以管理员身份运行此脚本"
     exit 1
 }
 
+# 停止运行 sing-box 和 xray
 $Process = @("sing-box", "xray")
 foreach ($P in $Process) {
     if (Get-Process $P -ErrorAction SilentlyContinue) {
         Stop-Process -Name $P -Force
-        Write-Host "${Green}[Success]${NC} $P has stopped."
+        Write-Host "${Green}[成功]${NC} $P 已停止"
     } else {
-        Write-Host "${Yellow}[Warning]${NC} $P is not running."
+        Write-Host "${Yellow}[警告]${NC} $P 未在运行"
     }
 }
 Clear-DnsClientCache
 Start-Sleep -Seconds 1
 
-# ---- 公共函数 ----
+# ========== 公共函数 [开始] ==========
 # 校验 Hash
 function VerifyHash {
     $Digest = $Response.assets | Where-Object { $_.name -eq "$FileName" } | Select-Object -ExpandProperty digest
     $RemoteHash = $Digest.Split(':')[-1]
     $LocalHash = (Get-FileHash $FilePath -Algorithm SHA256).Hash.ToLower()
-    Write-Host "${Cyan}[Notice]${NC} Verifying file integrity..."
     if ($RemoteHash -eq $LocalHash) {
-        Write-Host "${Green}[Success]${NC} File is intact."
+        Write-Host "${Green}[成功]${NC} 文件完整性检查通过"
         return $true
     } else {
-        Write-Host "${Red}[Error]${NC} File is corrupted!"
+        Write-Host "${Red}[错误]${NC} 文件已损坏"
         return $false
     }
 }
@@ -52,13 +52,13 @@ function Upgrade {
         if (Test-Path -Path $FilePath) {
             Remove-Item -Force $FilePath
         }
-        Write-Host "${Cyan}[Notice]${NC} Downloading..."
+        Write-Host "${Cyan}[提示]${NC} 正在下载"
         Invoke-WebRequest -OutFile $FilePath -Uri "https://gh-proxy.org/$Url"
         $Correct = VerifyHash
         if ($Correct) {
             $script:Cover = $true
         } else {
-            Write-Host "${Cyan}[Notice]${NC} Retry downloading..."
+            Write-Host "${Cyan}[提示]${NC} 正在重新下载"
             Start-Sleep -Seconds 1
         }
     } until ($Correct)
@@ -77,19 +77,19 @@ function CheckUpdate ($ExeName, $VersionArg) {
     $LocalVersionObj = [System.Version]$LocalVersionStr
     $RemoteVersionObj = [System.Version]$RemoteVersionStr
     if ($RemoteVersionObj -gt $LocalVersionObj) {
-        Write-Host "${Yellow}[Warning]${NC} New version: ${Yellow}$LocalVersionStr${NC} -> ${Green}$RemoteVersionStr${NC}"
+        Write-Host "${Yellow}[警告]${NC} 有新版本: ${Yellow}$LocalVersionStr${NC} -> ${Green}$RemoteVersionStr${NC}"
         Upgrade
     }
     else {
-        Write-Host "${Green}[Success]${NC} Up to date: $ExeName ${Green}$LocalVersionStr${NC}"
+        Write-Host "${Green}[成功]${NC} 已是最新: $ExeName ${Green}$LocalVersionStr${NC}"
     }
 }
-# ---- 公共函数 结束 ----
+# ========== 公共函数 [结束] ==========
 
 $WorkDir = "$env:USERPROFILE\Apps\sing-box-with-xray"
 
-# ---- 更新 sing-box ----
-Write-Host "${Cyan}[Notice]${NC} Checking sing-box updates..."
+# ========== 更新 sing-box [开始] ==========
+Write-Host "${Cyan}[提示]${NC} 正在检查更新 sing-box"
 $ExePath = "$WorkDir\sing-box.exe"
 $Response = Invoke-RestMethod -Uri "https://api.github.com/repos/SagerNet/sing-box/releases/latest" -Method Get
 $TagName = $Response.tag_name
@@ -107,10 +107,10 @@ if ($script:Cover) {
     Move-Item -Path "$WorkDir\$Folder\sing-box.exe" -Destination "$ExePath" -Force
     Remove-Item -Force -Recurse "$WorkDir\$Folder","$FilePath"
 }
-# ---- 更新 sing-box 结束 ----
+# ========== 更新 sing-box [结束] ==========
 
-# ---- 更新 xray ----
-Write-Host "${Cyan}[Notice]${NC} Checking xray updates..."
+# ========== 更新 xray [开始] ==========
+Write-Host "${Cyan}[提示]${NC} 正在检查更新 xray"
 $ExePath = "$WorkDir\xray.exe"
 $Response = Invoke-RestMethod -Uri "https://api.github.com/repos/XTLS/Xray-core/releases/latest" -Method Get
 $TagName = $Response.tag_name
@@ -128,10 +128,10 @@ if ($script:Cover) {
     Move-Item -Path "$WorkDir\$Folder\xray.exe" -Destination "$ExePath" -Force
     Remove-Item -Force -Recurse "$WorkDir\$Folder","$FilePath"
 }
-# ---- 更新 xray 结束 ----
+# ========== 更新 xray [结束] ==========
 
-# ---- 更新 jq ----
-Write-Host "${Cyan}[Notice]${NC} Checking jq updates..."
+# ========== 更新 jq [开始] ==========
+Write-Host "${Cyan}[提示]${NC} 正在检查更新 jq"
 $ExePath = "$WorkDir\jq.exe"
 $Response = Invoke-RestMethod -Uri "https://api.github.com/repos/jqlang/jq/releases/latest" -Method Get
 $TagName = $Response.tag_name
@@ -146,6 +146,6 @@ CheckUpdate 'jq' '--version'
 if ($script:Cover) {
     Move-Item -Path "$FilePath" -Destination "$ExePath" -Force
 }
-# ---- 更新 jq 结束 ----
+# ========== 更新 jq [结束] ==========
 
 pause
