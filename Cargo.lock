@@ -106,7 +106,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "sing-box-with-xray-tray"
+name = "sing-box_with_xray"
 version = "0.1.0"
 dependencies = [
  "serde_json",

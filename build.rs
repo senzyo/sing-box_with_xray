@@ -14,6 +14,7 @@ fn main() {
 
         let mut resource = winresource::WindowsResource::new();
         resource.set_manifest(manifest);
+        resource.set_icon("icon/ladder.ico");
         resource
             .compile()
             .expect("failed to compile Windows resources");

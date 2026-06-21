@@ -135,7 +135,7 @@ unsafe extern "system" fn wnd_proc(
 }
 
 unsafe fn load_app_icon(h_instance: HINSTANCE, work_dir: &Path) -> HICON {
-    let icon_path = work_dir.join("icon").join("Restart.ico");
+    let icon_path = work_dir.join("icon").join("ladder.ico");
     if icon_path.exists() {
         let icon_path = crate::wide_path(&icon_path);
         let icon = LoadImageW(
