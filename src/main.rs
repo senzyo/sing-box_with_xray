@@ -9,7 +9,7 @@ use std::fs;
 use std::os::windows::ffi::OsStrExt;
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Child, Command};
 use std::ptr::{null, null_mut};
 use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -37,6 +37,8 @@ struct ConfigAction {
 struct AppState {
     work_dir: PathBuf,
     config_actions: HashMap<u16, ConfigAction>,
+    sing_box: Option<Child>,
+    xray: Option<Child>,
 }
 
 static APP: OnceLock<Mutex<AppState>> = OnceLock::new();
@@ -55,6 +57,8 @@ fn run() -> Result<(), String> {
     APP.set(Mutex::new(AppState {
         work_dir: work_dir.clone(),
         config_actions: HashMap::new(),
+        sing_box: None,
+        xray: None,
     }))
     .map_err(|_| "初始化状态失败".to_string())?;
 
@@ -116,6 +120,15 @@ fn stop_processes(processes: &[&str]) -> Result<(), String> {
             .status();
     }
     flush_dns();
+
+    if let Some(mut app) = app_state_mut() {
+        if processes.contains(&"sing-box.exe") {
+            app.sing_box = None;
+        }
+        if processes.contains(&"xray.exe") {
+            app.xray = None;
+        }
+    }
     Ok(())
 }
 
@@ -130,7 +143,7 @@ fn start_sing_box() -> Result<(), String> {
     ensure_exists(&config)?;
     randomize_tun_name(&config)?;
 
-    hidden_command(exe)
+    let child = hidden_command(exe)
         .args(["run", "-D"])
         .arg(&work_dir)
         .arg("-c")
@@ -138,6 +151,10 @@ fn start_sing_box() -> Result<(), String> {
         .current_dir(work_dir)
         .spawn()
         .map_err(|e| format!("启动 sing-box 失败: {e}"))?;
+
+    if let Some(mut app) = app_state_mut() {
+        app.sing_box = Some(child);
+    }
 
     Ok(())
 }
@@ -150,12 +167,16 @@ fn start_xray() -> Result<(), String> {
     ensure_exists(&exe)?;
     ensure_exists(&config)?;
 
-    hidden_command(exe)
+    let child = hidden_command(exe)
         .args(["run", "-c"])
         .arg(config)
         .current_dir(work_dir)
         .spawn()
         .map_err(|e| format!("启动 xray 失败: {e}"))?;
+
+    if let Some(mut app) = app_state_mut() {
+        app.xray = Some(child);
+    }
 
     Ok(())
 }
@@ -249,6 +270,53 @@ fn hidden_command(program: impl AsRef<OsStr>) -> Command {
 
 fn flush_dns() {
     let _ = hidden_command("ipconfig").arg("/flushdns").status();
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum ProcessState {
+    NotInstalled,
+    NotRunning,
+    Running,
+}
+
+fn sing_box_state(app: &mut AppState) -> ProcessState {
+    if !app.work_dir.join("sing-box.exe").exists() {
+        return ProcessState::NotInstalled;
+    }
+    match &mut app.sing_box {
+        Some(child) => match child.try_wait() {
+            Ok(Some(_)) => {
+                app.sing_box = None;
+                ProcessState::NotRunning
+            }
+            Ok(None) => ProcessState::Running,
+            Err(_) => {
+                app.sing_box = None;
+                ProcessState::NotRunning
+            }
+        },
+        None => ProcessState::NotRunning,
+    }
+}
+
+fn xray_state(app: &mut AppState) -> ProcessState {
+    if !app.work_dir.join("xray.exe").exists() {
+        return ProcessState::NotInstalled;
+    }
+    match &mut app.xray {
+        Some(child) => match child.try_wait() {
+            Ok(Some(_)) => {
+                app.xray = None;
+                ProcessState::NotRunning
+            }
+            Ok(None) => ProcessState::Running,
+            Err(_) => {
+                app.xray = None;
+                ProcessState::NotRunning
+            }
+        },
+        None => ProcessState::NotRunning,
+    }
 }
 
 fn cleanup_orphaned_wintun() {

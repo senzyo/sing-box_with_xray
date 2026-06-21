@@ -2,20 +2,26 @@ use std::mem::{size_of, zeroed};
 use std::path::{Path, PathBuf};
 use std::ptr::{null, null_mut};
 use windows_sys::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, POINT, WPARAM};
+use windows_sys::Win32::Graphics::Gdi::{
+    CreateCompatibleDC, CreateDIBSection, DeleteDC, GetDC, ReleaseDC,
+    SelectObject, BI_RGB, BITMAPINFO, BITMAPINFOHEADER, DIB_RGB_COLORS,
+};
 use windows_sys::Win32::UI::Shell::{
     Shell_NotifyIconW, NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NOTIFYICONDATAW,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreatePopupMenu, CreateWindowExW, CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT,
-    DefWindowProcW, DestroyMenu, DispatchMessageW, GetCursorPos, GetMessageW, HICON, HMENU,
-    IDI_APPLICATION, IMAGE_ICON, LoadIconW, LoadImageW, LR_DEFAULTSIZE, LR_LOADFROMFILE,
-    MB_ICONERROR, MB_OK, MessageBoxW, MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING, MSG,
-    PostQuitMessage, RegisterClassW, SetForegroundWindow, TrackPopupMenu, TranslateMessage,
+    DefWindowProcW, DestroyIcon, DestroyMenu, DispatchMessageW, DrawIconEx, GetCursorPos,
+    GetMenuItemCount, GetMessageW,
+    HICON, HMENU, IDI_APPLICATION, IMAGE_ICON, LoadIconW, LoadImageW,
+    LR_DEFAULTSIZE, LR_LOADFROMFILE, MB_ICONERROR, MB_OK, MENUITEMINFOW, MIIM_BITMAP,
+    MessageBoxW, MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING, MSG, PostQuitMessage,
+    RegisterClassW, SetForegroundWindow, SetMenuItemInfoW, TrackPopupMenu, TranslateMessage,
     TPM_NONOTIFY, TPM_RETURNCMD, TPM_RIGHTBUTTON, WM_APP, WM_DESTROY, WM_LBUTTONUP,
-    WM_RBUTTONUP, WNDCLASSW, WS_OVERLAPPED,
+    WM_RBUTTONUP, WNDCLASSW, WS_OVERLAPPED, DI_NORMAL,
 };
 
-use crate::{AppState, ConfigAction, ConfigKind};
+use crate::{AppState, ConfigAction, ConfigKind, ProcessState};
 
 pub const WM_TRAY_ICON: u32 = WM_APP + 1;
 const TRAY_UID: u32 = 1;
@@ -163,6 +169,26 @@ unsafe fn show_tray_menu(hwnd: HWND) -> u16 {
     };
 
     let menu = CreatePopupMenu();
+
+    let sing_state = crate::sing_box_state(&mut app);
+    let xray_state = crate::xray_state(&mut app);
+    let work_dir = app.work_dir.clone();
+
+    let status_icon = |s: ProcessState| match s {
+        ProcessState::Running => "green_circle.ico",
+        ProcessState::NotRunning => "yellow_circle.ico",
+        ProcessState::NotInstalled => "red_circle.ico",
+    };
+    let status_label = |s: ProcessState, name: &str| match s {
+        ProcessState::Running => format!("{name} 正在运行"),
+        ProcessState::NotRunning => format!("{name} 未在运行"),
+        ProcessState::NotInstalled => format!("{name} 未安装"),
+    };
+
+    append_status_item(menu, &status_label(sing_state, "sing-box"), &work_dir, status_icon(sing_state));
+    append_status_item(menu, &status_label(xray_state, "xray"), &work_dir, status_icon(xray_state));
+    AppendMenuW(menu, MF_SEPARATOR, 0, null());
+
     let restart_menu = CreatePopupMenu();
     let stop_menu = CreatePopupMenu();
     let update_menu = CreatePopupMenu();
@@ -181,7 +207,6 @@ unsafe fn show_tray_menu(hwnd: HWND) -> u16 {
     append_item(update_menu, ID_UPDATE_CORE, "更新 sing-box / xray / jq");
 
     app.config_actions.clear();
-    let work_dir = app.work_dir.clone();
     append_config_items(
         &mut app,
         sing_menu,
@@ -233,6 +258,90 @@ unsafe fn append_item(menu: HMENU, id: u16, label: &str) {
 unsafe fn append_disabled_item(menu: HMENU, label: &str) {
     let label = crate::wide(label);
     AppendMenuW(menu, MF_STRING | MF_GRAYED, 0, label.as_ptr());
+}
+
+unsafe fn append_status_item(
+    menu: HMENU,
+    label: &str,
+    work_dir: &Path,
+    icon_name: &str,
+) {
+    let label = crate::wide(label);
+    let position = GetMenuItemCount(menu) as u32;
+    AppendMenuW(menu, MF_STRING, 0, label.as_ptr());
+
+    let icon_path = work_dir.join("icon").join(icon_name);
+    if !icon_path.exists() {
+        return;
+    }
+    let icon_path = crate::wide_path(&icon_path);
+    let hicon = LoadImageW(
+        null_mut(),
+        icon_path.as_ptr(),
+        IMAGE_ICON,
+        16,
+        16,
+        LR_LOADFROMFILE,
+    );
+    if hicon.is_null() {
+        return;
+    }
+
+    let screen_dc = GetDC(null_mut());
+    if screen_dc.is_null() {
+        DestroyIcon(hicon as HICON);
+        return;
+    }
+    let mem_dc = CreateCompatibleDC(screen_dc);
+    if mem_dc.is_null() {
+        ReleaseDC(null_mut(), screen_dc);
+        DestroyIcon(hicon as HICON);
+        return;
+    }
+
+    // 配置 32 位（ARGB）带有透明通道的 BITMAPINFO 结构体
+    let mut bmi: BITMAPINFO = zeroed();
+    bmi.bmiHeader.biSize = size_of::<BITMAPINFOHEADER>() as u32;
+    bmi.bmiHeader.biWidth = 16;
+    bmi.bmiHeader.biHeight = 16;
+    bmi.bmiHeader.biPlanes = 1;
+    bmi.bmiHeader.biBitCount = 32;
+    bmi.bmiHeader.biCompression = BI_RGB;
+
+    let mut pv_bits: *mut std::ffi::c_void = null_mut();
+    // 创建一个 32 位 DIB。其像素初始值全为 0（代表 100% 完全透明）
+    let bmp = CreateDIBSection(
+        mem_dc,
+        &bmi,
+        DIB_RGB_COLORS,
+        &mut pv_bits,
+        0 as _, // 兼容 windows-sys 的 HANDLE 类型转换为 0
+        0,
+    );
+
+    ReleaseDC(null_mut(), screen_dc);
+
+    if bmp.is_null() {
+        DeleteDC(mem_dc);
+        DestroyIcon(hicon as HICON);
+        return;
+    }
+
+    let old_bmp = SelectObject(mem_dc, bmp);
+
+    // 将 HICON 绘制到透明的 32 位 DIB 缓存中。
+    // 此时 DrawIconEx 将会直接写入带有 Alpha 信息的预乘透明像素。
+    DrawIconEx(mem_dc, 0, 0, hicon as HICON, 16, 16, 0, null_mut(), DI_NORMAL);
+
+    SelectObject(mem_dc, old_bmp);
+    DeleteDC(mem_dc);
+    DestroyIcon(hicon as HICON);
+
+    let mut mii: MENUITEMINFOW = zeroed();
+    mii.cbSize = size_of::<MENUITEMINFOW>() as u32;
+    mii.fMask = MIIM_BITMAP;
+    mii.hbmpItem = bmp;
+    SetMenuItemInfoW(menu, position, 1, &mii);
 }
 
 unsafe fn append_submenu(menu: HMENU, submenu: HMENU, label: &str) {
