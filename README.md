@@ -3,53 +3,145 @@
     <img src="https://xtls.github.io/logo-light.svg" width="100px" align="center" />
     <h2 align="center">sing-box-with-xray</h2>
     <p align="center">
-        运行裸核的 PowerShell 简单脚本方案, 使用 sing-box 的 TUN 搭配 Xray<br />
+        一个极简 Windows 托盘程序, 使用 sing-box TUN 搭配 Xray
     </p>
 </p>
 
+## 简介
+
+本项目用于在 Windows 上运行 sing-box 和 Xray。
+
+sing-box 负责 TUN、路由和大部分流量处理。直连流量由 sing-box 直接出站, 代理流量由 sing-box 转发到本地 socks 出站, 再交给 Xray 与 VPS 通信。
+
+项目现在以 Rust 编写的系统托盘程序作为主入口, 不提供软件主界面。运行后常驻系统托盘, 单击托盘图标即可打开菜单。
+
 ## 功能
 
-sing-box 负责大部分工作。直连流量从 sing-box 直接出站, 代理流量从 socks 出站到 Xray, Xray 只负责和 VPS 通信。
+- 重启
+  - 重启 sing-box
+  - 重启 xray
+  - 重启 sing-box 和 xray
+- 终止
+  - 终止 sing-box
+  - 终止 xray
+  - 终止 sing-box 和 xray
+- 更新
+  - 更新 sing-box、xray 和 jq
+- 切换配置文件
+  - 切换 sing-box 配置
+  - 切换 xray 配置
 
-- `Restart.ps1` 重启 sing-box 和 xray 进程, 随机化 sing-tun 接口名称避免网络不通。
-- `Stop.ps1` 停止 sing-box 和 xray 进程。
-- `Update.ps1` 更新 sing-box, xray 和 jq 可执行程序。
+重启 sing-box 时, 程序会自动随机化 `sing-box.json` 中 TUN 入站的 `interface_name`, 用于避免残留 TUN 网卡导致网络不通。
 
-## 注意事项
+## 目录结构
 
-- 仅适用于 Windows。
-- 所有文件存放于 `$env:USERPROFILE\Apps\sing-box-with-xray`, 如有需要请自行更改 `$WorkDir`。
-- 自行更改 `xray.json` 中的参数, 更多模板参考 `templates` 目录。
-- 确保 `.ps1` 脚本文件的编码为 `UTF-8 with BOM`, `CRLF`。
+推荐将运行文件放在同一个目录中, 例如:
 
-## 初次使用
-
-1. 将 `Restart.ps1`、`Stop.ps1`、`Update.ps1`、`sing-box.json` 和修改好的 `xray.json` 放入 `$env:USERPROFILE\Apps\sing-box-with-xray`。
-2. 运行 `Update.ps1` 下载 sing-box, xray 和 jq 可执行程序。
-3. 运行 `Restart.ps1` 启动 sing-box 和 xray 进程。
-
-## 快捷方式
-
-为 `.ps1` 脚本创建快捷方式, 右击快捷方式, `属性`→`快捷方式`→`目标`, 在脚本文件路径前添加 `powershell.exe -ExecutionPolicy Bypass -File`, 注意 `-File` 和文件之间还有一个空格, 比如:
-
-```powershell
-powershell.exe -ExecutionPolicy Bypass -File "C:\Users\admin\Apps\sing-box-with-xray\Stop.ps1"
+```text
+sing-box-with-xray/
+  sing-box-with-xray-tray.exe
+  sing-box.exe
+  xray.exe
+  jq.exe
+  sing-box.json
+  xray.json
+  Update.ps1
+  icon/
+  configs/
+    sing-box/
+      *.json
+    xray/
+      *.json
 ```
 
-点击 `应用`。
+其中:
 
-此外, 在 `属性`→`快捷方式`→`高级` 中勾选 `用管理员身份运行`。
+- `sing-box-with-xray-tray.exe`: 托盘程序主入口。
+- `sing-box.exe`: sing-box 核心。
+- `xray.exe`: Xray 核心。
+- `jq.exe`: 当前更新脚本仍会更新 jq。
+- `sing-box.json`: 当前正在使用的 sing-box 配置。
+- `xray.json`: 当前正在使用的 xray 配置。
+- `configs\sing-box`: 可切换的 sing-box 配置目录。
+- `configs\xray`: 可切换的 xray 配置目录。
+- `Update.ps1`: 当前用于更新 sing-box、xray 和 jq 的兼容脚本。
 
-如果要为快捷方式更换图标, 图标在 `icon` 目录。
+## 使用方法
 
-以后使用时点击快捷方式即可。
+1. 编译或下载 `sing-box-with-xray-tray.exe`。
+2. 将 `sing-box.exe`、`xray.exe`、`sing-box.json`、`xray.json` 等文件放在同一目录。
+3. 双击运行 `sing-box-with-xray-tray.exe`。
+4. Windows 弹出 UAC 提示时选择允许。
+5. 在系统托盘中单击或右键程序图标, 使用弹出菜单管理 sing-box 和 xray。
 
-### 如果脚本无法运行
+程序需要管理员权限运行, 因为 sing-box TUN 和 DNS 缓存清理等操作需要提升权限。
 
-参考微软官方文档 [Set-ExecutionPolicy](https://learn.microsoft.com/zh-cn/powershell/module/microsoft.powershell.security/set-executionpolicy), 以管理员身份运行 PowerShell, 执行以下命令:
+## 配置切换
 
-```powershell
-Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope LocalMachine
+将备用 sing-box 配置放入:
+
+```text
+configs\sing-box\
 ```
 
-也许还需在 `属性`→`常规` 最下方的 `安全` 勾选解除锁定: “此文件来自其他计算机, 可能被阻止以帮助保护该计算机”。
+将备用 xray 配置放入:
+
+```text
+configs\xray\
+```
+
+托盘菜单会自动扫描这些目录下的 `.json` 文件。
+
+选择某个 sing-box 配置后, 程序会将它复制为 `sing-box.json`, 然后重启 sing-box。
+
+选择某个 xray 配置后, 程序会将它复制为 `xray.json`, 然后重启 xray。
+
+## 更新
+
+托盘菜单中的更新功能目前会调用 `Update.ps1`, 用于更新:
+
+- sing-box
+- xray
+- jq
+
+软件本体不会自动更新。
+
+## 开发
+
+本项目使用 Rust 开发 Windows 托盘程序。
+
+需要安装:
+
+- Rust stable toolchain
+- Build Tools for Visual Studio 2022
+- MSVC v143
+- Windows 10/11 SDK
+
+编译:
+
+```powershell
+cargo build --release
+```
+
+生成文件:
+
+```text
+target\release\sing-box-with-xray-tray.exe
+```
+
+项目已经在 `Cargo.toml` 中配置 release 体积优化:
+
+```toml
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"
+```
+
+## 旧脚本
+
+仓库中仍保留 `Restart.ps1`、`Stop.ps1` 和 `Update.ps1`。
+
+当前主入口是 Rust 托盘程序。`Restart.ps1` 和 `Stop.ps1` 主要作为旧方案保留; `Update.ps1` 暂时仍被托盘程序用于更新 sing-box、xray 和 jq。

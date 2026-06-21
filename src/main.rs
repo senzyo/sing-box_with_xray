@@ -230,10 +230,7 @@ unsafe fn show_tray_menu(hwnd: HWND) {
             xray_menu,
             ConfigKind::Xray,
             ID_XRAY_CONFIG_BASE,
-            &[
-                work_dir.join("configs").join("xray"),
-                work_dir.join("templates"),
-            ],
+            &[work_dir.join("configs").join("xray")],
         );
 
         append_submenu(switch_menu, sing_menu, "切换 sing-box 配置");
