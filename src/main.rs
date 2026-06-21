@@ -16,6 +16,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use windows_sys::Win32::Foundation::HWND;
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::System::Threading::CREATE_NO_WINDOW;
+use windows_sys::Win32::Devices::DeviceAndDriverInstallation::{
+    CM_Get_DevNode_Status, CM_Get_Device_ID_ListW, CM_Get_Device_ID_List_SizeW,
+    CM_Locate_DevNodeW, CR_SUCCESS, DN_HAS_PROBLEM, DN_STARTED,
+};
 use windows_sys::Win32::UI::WindowsAndMessaging::DestroyWindow;
 
 #[derive(Clone)]
@@ -117,6 +121,8 @@ fn stop_processes(processes: &[&str]) -> Result<(), String> {
 }
 
 fn start_sing_box() -> Result<(), String> {
+    cleanup_orphaned_wintun();
+
     let work_dir = work_dir()?;
     let exe = work_dir.join("sing-box.exe");
     let config = work_dir.join("sing-box.json");
@@ -247,6 +253,70 @@ fn flush_dns() {
     let _ = hidden_command("ipconfig").arg("/flushdns").status();
 }
 
+fn cleanup_orphaned_wintun() {
+    const CR_NO_SUCH_DEVNODE: u32 = 0x0D;
+
+    let mut instance_ids: Vec<String> = Vec::new();
+
+    unsafe {
+        let mut size = 0u32;
+        if CM_Get_Device_ID_List_SizeW(&mut size, null(), 0) != CR_SUCCESS {
+            return;
+        }
+        if size == 0 {
+            return;
+        }
+
+        let mut buffer: Vec<u16> = vec![0u16; size as usize];
+        if CM_Get_Device_ID_ListW(null(), buffer.as_mut_ptr(), size, 0) != CR_SUCCESS {
+            return;
+        }
+
+        let mut start = 0usize;
+        while start < buffer.len() {
+            let end = buffer[start..]
+                .iter()
+                .position(|&c| c == 0)
+                .map(|p| start + p)
+                .unwrap_or(buffer.len());
+            if end == start {
+                break;
+            }
+            let id = String::from_utf16_lossy(&buffer[start..end]);
+
+            if id.to_uppercase().contains("WINTUN") {
+                let mut dev_inst = 0u32;
+                let wide_id = wide(&id);
+                let locate_ret = CM_Locate_DevNodeW(&mut dev_inst, wide_id.as_ptr(), 0);
+
+                if locate_ret == CR_NO_SUCH_DEVNODE {
+                    instance_ids.push(id);
+                } else if locate_ret == CR_SUCCESS {
+                    let mut status = 0u32;
+                    let mut problem = 0u32;
+                    if CM_Get_DevNode_Status(&mut status, &mut problem, dev_inst, 0) == CR_SUCCESS
+                        && ((status & DN_STARTED) == 0 || (status & DN_HAS_PROBLEM) != 0)
+                    {
+                        instance_ids.push(id);
+                    }
+                }
+            }
+
+            start = end + 1;
+        }
+    }
+
+    for id in &instance_ids {
+        let _ = hidden_command("pnputil")
+            .args(["/remove-device", id.as_str()])
+            .status();
+    }
+
+    if !instance_ids.is_empty() {
+        let _ = hidden_command("pnputil").arg("/scan-devices").status();
+    }
+}
+
 fn ensure_exists(path: &Path) -> Result<(), String> {
     if path.exists() {
         Ok(())
@@ -340,3 +410,5 @@ fn set_wstr_array<const N: usize>(target: &mut [u16; N], value: &str) {
     target[..len].copy_from_slice(&wide[..len]);
     target[len] = 0;
 }
+
+
