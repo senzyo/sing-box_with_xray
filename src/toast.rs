@@ -1,0 +1,233 @@
+use std::ffi::c_void;
+use std::os::windows::ffi::OsStrExt;
+use std::path::PathBuf;
+use windows::core::{HSTRING, Interface};
+use windows::Data::Xml::Dom::XmlDocument;
+use windows::UI::Notifications::{ToastNotification, ToastNotificationManager};
+use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_INPROC_SERVER, IPersistFile};
+use windows::Win32::UI::Shell::{
+    IShellLinkW, SetCurrentProcessExplicitAppUserModelID, ShellLink,
+};
+
+const AUMID: &str = "SingBoxWithXray";
+
+// ═══════════════════════════════════════════════
+// Public API
+// ═══════════════════════════════════════════════
+
+pub fn setup(exe_path: &std::path::Path) -> Result<(), String> {
+    unsafe {
+        SetCurrentProcessExplicitAppUserModelID(&HSTRING::from(AUMID))
+            .map_err(|e| format!("设置 AUMID 失败: {e}"))?;
+    }
+    ensure_shortcut(exe_path)?;
+    Ok(())
+}
+
+pub fn show_toast(title: &str, message: &str) {
+    let xml = format!(
+        "<toast><visual><binding template=\"ToastGeneric\"><text>{}</text><text>{}</text></binding></visual><audio silent=\"true\"/></toast>",
+        xml_escape(title), xml_escape(message),
+    );
+    if let Err(e) = show_toast_xml(&xml, None) {
+        fallback_msgbox(title, &e);
+    }
+}
+
+pub fn show_toast_tagged(title: &str, message: &str, tag: &str) {
+    let xml = format!(
+        "<toast><visual><binding template=\"ToastGeneric\"><text>{}</text><text>{}</text></binding></visual><audio silent=\"true\"/></toast>",
+        xml_escape(title), xml_escape(message),
+    );
+    if let Err(e) = show_toast_xml(&xml, Some(tag)) {
+        fallback_msgbox(title, &e);
+    }
+}
+
+pub fn show_progress_toast(title: &str, tag: &str) {
+    let xml = format!(
+        "<toast><visual><binding template=\"ToastGeneric\"><text>{}</text><progress title=\"下载中\" value=\"indeterminate\" valueStringOverride=\"准备下载...\" status=\"\"/></binding></visual><audio silent=\"true\"/></toast>",
+        xml_escape(title),
+    );
+    if let Err(e) = show_toast_xml(&xml, Some(tag)) {
+        fallback_msgbox(title, &e);
+    }
+}
+
+// ═══════════════════════════════════════════════
+// Internal helpers
+// ═══════════════════════════════════════════════
+
+fn xml_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&apos;")
+}
+
+fn show_toast_xml(xml_str: &str, tag: Option<&str>) -> Result<(), String> {
+    let xml = XmlDocument::new().map_err(|e| format!("创建 XmlDocument 失败: {e}"))?;
+    xml.LoadXml(&HSTRING::from(xml_str)).map_err(|e| format!("加载 toast XML 失败: {e}"))?;
+    let toast = ToastNotification::CreateToastNotification(&xml)
+        .map_err(|e| format!("创建 toast 失败: {e}"))?;
+    if let Some(t) = tag {
+        toast.SetTag(&HSTRING::from(t)).map_err(|e| format!("设置 toast tag 失败: {e}"))?;
+    }
+    let notifier = ToastNotificationManager::CreateToastNotifierWithId(&HSTRING::from(AUMID))
+        .map_err(|e| format!("创建 ToastNotifier 失败: {e}"))?;
+    notifier.Show(&toast).map_err(|e| format!("显示 toast 失败: {e}"))?;
+    Ok(())
+}
+
+fn fallback_msgbox(title: &str, err: &str) {
+    let msg = format!("Toast 通知失败: {err}");
+    unsafe {
+        let title_wide: Vec<u16> =
+            std::ffi::OsStr::new(title).encode_wide().chain(Some(0)).collect();
+        let msg_wide: Vec<u16> =
+            std::ffi::OsStr::new(&msg).encode_wide().chain(Some(0)).collect();
+        windows_sys::Win32::UI::WindowsAndMessaging::MessageBoxW(
+            std::ptr::null_mut(),
+            msg_wide.as_ptr(),
+            title_wide.as_ptr(),
+            windows_sys::Win32::UI::WindowsAndMessaging::MB_OK
+                | windows_sys::Win32::UI::WindowsAndMessaging::MB_ICONERROR,
+        );
+    }
+}
+
+// ═══════════════════════════════════════════════
+// Shortcut (windows crate IShellLinkW + windows-sys property store)
+// ═══════════════════════════════════════════════
+
+fn ensure_shortcut(exe_path: &std::path::Path) -> Result<(), String> {
+    let programs_dir = get_programs_dir()?;
+    let lnk_path = programs_dir.join(format!("{}.lnk", AUMID));
+    std::fs::create_dir_all(&programs_dir)
+        .map_err(|e| format!("创建 Programs 目录失败: {e}"))?;
+    create_shortcut(exe_path, &lnk_path)
+}
+
+fn create_shortcut(
+    exe_path: &std::path::Path,
+    lnk_path: &std::path::Path,
+) -> Result<(), String> {
+    unsafe {
+        let shell_link: IShellLinkW =
+            CoCreateInstance(&ShellLink, None, CLSCTX_INPROC_SERVER)
+                .map_err(|e| format!("创建 ShellLink 失败: {e}"))?;
+        shell_link
+            .SetPath(&HSTRING::from(exe_path.to_string_lossy().as_ref()))
+            .map_err(|e| format!("设置链接路径失败: {e}"))?;
+        if let Some(parent) = exe_path.parent() {
+            shell_link
+                .SetWorkingDirectory(&HSTRING::from(parent.to_string_lossy().as_ref()))
+                .map_err(|e| format!("设置工作目录失败: {e}"))?;
+        }
+        let persist: IPersistFile = shell_link.cast()
+            .map_err(|e| format!("获取 IPersistFile 失败: {e}"))?;
+        persist
+            .Save(&HSTRING::from(lnk_path.to_string_lossy().as_ref()), true)
+            .map_err(|e| format!("保存快捷方式失败: {e}"))?;
+    }
+
+    set_shortcut_aumid(lnk_path)
+}
+
+fn set_shortcut_aumid(lnk_path: &std::path::Path) -> Result<(), String> {
+    unsafe {
+        use windows_sys::Win32::System::Com::StructuredStorage::PROPVARIANT;
+
+        let lnk_wide: Vec<u16> =
+            std::ffi::OsStr::new(&lnk_path.to_string_lossy().as_ref())
+                .encode_wide().chain(Some(0)).collect();
+
+        let mut pps: *mut c_void = std::ptr::null_mut();
+        let hr = windows_sys::Win32::UI::Shell::PropertiesSystem::SHGetPropertyStoreFromParsingName(
+            lnk_wide.as_ptr(),
+            std::ptr::null_mut(),
+            2, // GPS_READWRITE
+            &IID_IPROPERTY_STORE,
+            &mut pps,
+        );
+        if hr != 0 {
+            return Err(format!("SHGetPropertyStoreFromParsingName 失败: 0x{hr:08X}"));
+        }
+        if pps.is_null() {
+            return Err("未获取到 IPropertyStore".to_string());
+        }
+
+        let prop_store = &*(pps as *const IPropertyStoreW);
+
+        let aumid_wide: Vec<u16> =
+            std::ffi::OsStr::new(AUMID).encode_wide().chain(Some(0)).collect();
+
+        let mut pv: PROPVARIANT = std::mem::zeroed();
+        let pv_ptr = &mut pv as *mut PROPVARIANT as *mut u8;
+        std::ptr::write(pv_ptr as *mut u16, VT_LPWSTR as u16);
+        std::ptr::write(pv_ptr.add(8) as *mut *const u16, aumid_wide.as_ptr());
+
+        let pkey = PROPERTYKEY_S { fmtid: GUID_PKEY_AUMID, pid: 5 };
+        let hr = ((*prop_store.0).set_value)(pps, &pkey, &pv);
+        if hr != 0 {
+            ((*prop_store.0).release)(pps);
+            return Err(format!("IPropertyStore::SetValue 失败: 0x{hr:08X}"));
+        }
+        let hr = ((*prop_store.0).commit)(pps);
+        ((*prop_store.0).release)(pps);
+        if hr != 0 {
+            return Err(format!("IPropertyStore::Commit 失败: 0x{hr:08X}"));
+        }
+    }
+    Ok(())
+}
+
+fn get_programs_dir() -> Result<PathBuf, String> {
+    let appdata = std::env::var("APPDATA").map_err(|_| "无法获取 APPDATA 路径".to_string())?;
+    Ok(PathBuf::from(appdata)
+        .join("Microsoft").join("Windows").join("Start Menu").join("Programs"))
+}
+
+// ═══════════════════════════════════════════════
+// COM vtables & types for windows-sys IPropertyStore
+// ═══════════════════════════════════════════════
+
+const VT_LPWSTR: i32 = 31;
+
+const GUID_PKEY_AUMID: windows_sys::core::GUID = windows_sys::core::GUID {
+    data1: 0x9F4C2855, data2: 0x9F79, data3: 0x4B39,
+    data4: [0xA8, 0xD0, 0xE1, 0xD4, 0x2D, 0xE1, 0xD5, 0xF3],
+};
+
+const IID_IPROPERTY_STORE: windows_sys::core::GUID = windows_sys::core::GUID {
+    data1: 0x886D8EEB, data2: 0x8CF2, data3: 0x4446,
+    data4: [0x8D, 0x02, 0xCD, 0xBA, 0x1D, 0xBD, 0xCF, 0x99],
+};
+
+#[repr(C)]
+struct PROPERTYKEY_S {
+    fmtid: windows_sys::core::GUID,
+    pid: u32,
+}
+
+#[repr(C)]
+struct IPropertyStoreVtbl {
+    query_interface: unsafe extern "system" fn(
+        this: *mut c_void, riid: *const windows_sys::core::GUID, ppv: *mut *mut c_void,
+    ) -> i32,
+    add_ref: unsafe extern "system" fn(this: *mut c_void) -> u32,
+    release: unsafe extern "system" fn(this: *mut c_void) -> u32,
+    _get_count: *const c_void,
+    _get_at: *const c_void,
+    _get_value: *const c_void,
+    set_value: unsafe extern "system" fn(
+        this: *mut c_void,
+        key: *const PROPERTYKEY_S,
+        propvar: *const windows_sys::Win32::System::Com::StructuredStorage::PROPVARIANT,
+    ) -> i32,
+    commit: unsafe extern "system" fn(this: *mut c_void) -> i32,
+}
+
+#[repr(C)]
+struct IPropertyStoreW(*mut IPropertyStoreVtbl);

@@ -23,7 +23,7 @@ pub fn update_sing_box(work_dir: &Path) -> Result<(), String> {
     let (remote_ver, assets) = fetch_release(api_url)?;
 
     if !is_newer(&local, &remote_ver) {
-        crate::tray::show_balloon("sing-box", "当前已是最新版本");
+        crate::toast::show_toast("sing-box", "当前已是最新版本");
         return Ok(());
     }
 
@@ -36,11 +36,20 @@ pub fn update_sing_box(work_dir: &Path) -> Result<(), String> {
     };
     let expected_hash = find_asset_digest(&assets, &zip_name);
 
-    crate::tray::show_balloon("sing-box", &format!("检测到新版本 v{remote_ver}"));
-    crate::tray::show_balloon("sing-box", "正在更新...");
+    crate::toast::show_toast("sing-box", &format!("检测到新版本 v{remote_ver}"));
 
-    if download_with_retry(&download_url, &zip_path, expected_hash.as_deref()).is_err() {
-        crate::tray::show_balloon("sing-box", "下载失败，请稍后重试");
+    let tag = "update-sing-box";
+    let title = format!("sing-box v{remote_ver}");
+    crate::toast::show_progress_toast(&title, tag);
+
+    if download_with_retry(
+        &download_url,
+        &zip_path,
+        expected_hash.as_deref(),
+    )
+    .is_err()
+    {
+        crate::toast::show_toast_tagged("sing-box", "下载失败，请稍后重试", tag);
         return Ok(());
     }
 
@@ -48,7 +57,7 @@ pub fn update_sing_box(work_dir: &Path) -> Result<(), String> {
     replace_exe_from_zip(&zip_path, &exe_in_zip, &exe_path)?;
 
     let _ = fs::remove_file(&zip_path);
-    crate::tray::show_balloon("sing-box", "更新完成");
+    crate::toast::show_toast_tagged("sing-box", "更新完成", tag);
     Ok(())
 }
 
@@ -60,7 +69,7 @@ pub fn update_xray(work_dir: &Path) -> Result<(), String> {
     let (remote_ver, assets) = fetch_release(api_url)?;
 
     if !is_newer(&local, &remote_ver) {
-        crate::tray::show_balloon("xray", "当前已是最新版本");
+        crate::toast::show_toast("xray", "当前已是最新版本");
         return Ok(());
     }
 
@@ -73,18 +82,27 @@ pub fn update_xray(work_dir: &Path) -> Result<(), String> {
     };
     let expected_hash = find_asset_digest(&assets, zip_name);
 
-    crate::tray::show_balloon("xray", &format!("检测到新版本 v{remote_ver}"));
-    crate::tray::show_balloon("xray", "正在更新...");
+    crate::toast::show_toast("xray", &format!("检测到新版本 v{remote_ver}"));
 
-    if download_with_retry(&download_url, &zip_path, expected_hash.as_deref()).is_err() {
-        crate::tray::show_balloon("xray", "下载失败，请稍后重试");
+    let tag = "update-xray";
+    let title = format!("xray v{remote_ver}");
+    crate::toast::show_progress_toast(&title, tag);
+
+    if download_with_retry(
+        &download_url,
+        &zip_path,
+        expected_hash.as_deref(),
+    )
+    .is_err()
+    {
+        crate::toast::show_toast_tagged("xray", "下载失败，请稍后重试", tag);
         return Ok(());
     }
 
     replace_exe_from_zip(&zip_path, "xray.exe", &exe_path)?;
 
     let _ = fs::remove_file(&zip_path);
-    crate::tray::show_balloon("xray", "更新完成");
+    crate::toast::show_toast_tagged("xray", "更新完成", tag);
     Ok(())
 }
 

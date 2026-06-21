@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod toast;
 mod tray;
 mod update;
 
@@ -14,6 +15,7 @@ use std::process::{Child, Command};
 use std::ptr::{null, null_mut};
 use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
+use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED};
 use windows_sys::Win32::Foundation::HWND;
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::System::Threading::CREATE_NO_WINDOW;
@@ -51,7 +53,17 @@ fn main() {
 }
 
 fn run() -> Result<(), String> {
+    unsafe {
+        CoInitializeEx(None, COINIT_APARTMENTTHREADED)
+            .ok()
+            .map_err(|e| format!("初始化 COM 失败: {e}"))?;
+    }
+
     let work_dir = detect_work_dir();
+    let exe_path = std::env::current_exe()
+        .unwrap_or_else(|_| work_dir.join("sing-box_with_xray.exe"));
+    toast::setup(&exe_path).map_err(|e| format!("初始化 Toast 通知失败: {e}"))?;
+
     fs::create_dir_all(work_dir.join("configs").join("sing-box")).map_err(|e| e.to_string())?;
     fs::create_dir_all(work_dir.join("configs").join("xray")).map_err(|e| e.to_string())?;
 
@@ -90,16 +102,24 @@ fn execute_menu_command(hwnd: HWND, id: u16) {
                 }
             };
             let _ = stop_all();
-            let result = match id {
-                tray::ID_UPDATE_ALL => update::update_cores(&work_dir),
-                tray::ID_UPDATE_SING => update::update_sing_box(&work_dir),
-                tray::ID_UPDATE_XRAY => update::update_xray(&work_dir),
-                _ => unreachable!(),
-            };
-            tray::set_tooltip("sing-box-with-xray");
-            if let Err(e) = result {
-                tray::show_balloon("更新失败", &e);
-            }
+            std::thread::spawn(move || {
+                unsafe {
+                    let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+                }
+                let result = match id {
+                    tray::ID_UPDATE_ALL => update::update_cores(&work_dir),
+                    tray::ID_UPDATE_SING => update::update_sing_box(&work_dir),
+                    tray::ID_UPDATE_XRAY => update::update_xray(&work_dir),
+                    _ => unreachable!(),
+                };
+                tray::set_tooltip("sing-box-with-xray");
+                if let Err(e) = result {
+                    toast::show_toast("更新失败", &e);
+                }
+                unsafe {
+                    CoUninitialize();
+                }
+            });
             return;
         }
         tray::ID_EXIT => {

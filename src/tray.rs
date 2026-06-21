@@ -8,7 +8,7 @@ use windows_sys::Win32::Graphics::Gdi::{
     SelectObject, BI_RGB, BITMAPINFO, BITMAPINFOHEADER, DIB_RGB_COLORS,
 };
 use windows_sys::Win32::UI::Shell::{
-    Shell_NotifyIconW, NIF_ICON, NIF_INFO, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NIM_MODIFY, NOTIFYICONDATAW,
+    Shell_NotifyIconW, NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NIM_MODIFY, NOTIFYICONDATAW,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreatePopupMenu, CreateWindowExW, CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT,
@@ -124,22 +124,6 @@ pub fn set_tooltip(text: &str) {
             nid.uID = TRAY_UID;
             nid.uFlags = NIF_TIP;
             crate::set_wstr_array(&mut nid.szTip, text);
-            Shell_NotifyIconW(NIM_MODIFY, &nid);
-        }
-    }
-}
-
-pub fn show_balloon(title: &str, message: &str) {
-    if let Some(&hwnd_val) = TRAY_HWND.get() {
-        let hwnd = hwnd_val as HWND;
-        unsafe {
-            let mut nid: NOTIFYICONDATAW = zeroed();
-            nid.cbSize = size_of::<NOTIFYICONDATAW>() as u32;
-            nid.hWnd = hwnd;
-            nid.uID = TRAY_UID;
-            nid.uFlags = NIF_INFO;
-            crate::set_wstr_array(&mut nid.szInfoTitle, title);
-            crate::set_wstr_array(&mut nid.szInfo, message);
             Shell_NotifyIconW(NIM_MODIFY, &nid);
         }
     }
