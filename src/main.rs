@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod tray;
+mod update;
 
 use serde_json::Value;
 use std::collections::HashMap;
@@ -80,7 +81,27 @@ fn execute_menu_command(hwnd: HWND, id: u16) {
         tray::ID_STOP_SING => stop_processes(&["sing-box.exe"]),
         tray::ID_STOP_XRAY => stop_processes(&["xray.exe"]),
         tray::ID_STOP_ALL => stop_all(),
-        tray::ID_UPDATE_CORE => run_update_script(),
+        tray::ID_UPDATE_ALL | tray::ID_UPDATE_SING | tray::ID_UPDATE_XRAY => {
+            let work_dir = match work_dir() {
+                Ok(d) => d,
+                Err(e) => {
+                    tray::show_error(hwnd, "操作失败", &e);
+                    return;
+                }
+            };
+            let _ = stop_all();
+            let result = match id {
+                tray::ID_UPDATE_ALL => update::update_cores(&work_dir),
+                tray::ID_UPDATE_SING => update::update_sing_box(&work_dir),
+                tray::ID_UPDATE_XRAY => update::update_xray(&work_dir),
+                _ => unreachable!(),
+            };
+            tray::set_tooltip("sing-box-with-xray");
+            if let Err(e) = result {
+                tray::show_balloon("更新失败", &e);
+            }
+            return;
+        }
         tray::ID_EXIT => {
             unsafe { DestroyWindow(hwnd) };
             Ok(())
@@ -177,21 +198,6 @@ fn start_xray() -> Result<(), String> {
     if let Some(mut app) = app_state_mut() {
         app.xray = Some(child);
     }
-
-    Ok(())
-}
-
-fn run_update_script() -> Result<(), String> {
-    let work_dir = work_dir()?;
-    let script = work_dir.join("Update.ps1");
-    ensure_exists(&script)?;
-
-    Command::new("powershell.exe")
-        .args(["-ExecutionPolicy", "Bypass", "-File"])
-        .arg(script)
-        .current_dir(work_dir)
-        .spawn()
-        .map_err(|e| format!("启动更新脚本失败: {e}"))?;
 
     Ok(())
 }

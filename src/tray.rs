@@ -1,13 +1,14 @@
 use std::mem::{size_of, zeroed};
 use std::path::{Path, PathBuf};
 use std::ptr::{null, null_mut};
+use std::sync::OnceLock;
 use windows_sys::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, POINT, WPARAM};
 use windows_sys::Win32::Graphics::Gdi::{
     CreateCompatibleDC, CreateDIBSection, DeleteDC, GetDC, ReleaseDC,
     SelectObject, BI_RGB, BITMAPINFO, BITMAPINFOHEADER, DIB_RGB_COLORS,
 };
 use windows_sys::Win32::UI::Shell::{
-    Shell_NotifyIconW, NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NOTIFYICONDATAW,
+    Shell_NotifyIconW, NIF_ICON, NIF_INFO, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NIM_MODIFY, NOTIFYICONDATAW,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreatePopupMenu, CreateWindowExW, CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT,
@@ -26,13 +27,17 @@ use crate::{AppState, ConfigAction, ConfigKind, ProcessState};
 pub const WM_TRAY_ICON: u32 = WM_APP + 1;
 const TRAY_UID: u32 = 1;
 
+static TRAY_HWND: OnceLock<isize> = OnceLock::new();
+
 pub const ID_RESTART_SING: u16 = 101;
 pub const ID_RESTART_XRAY: u16 = 102;
 pub const ID_RESTART_ALL: u16 = 103;
 pub const ID_STOP_SING: u16 = 201;
 pub const ID_STOP_XRAY: u16 = 202;
 pub const ID_STOP_ALL: u16 = 203;
-pub const ID_UPDATE_CORE: u16 = 301;
+pub const ID_UPDATE_ALL: u16 = 301;
+pub const ID_UPDATE_SING: u16 = 302;
+pub const ID_UPDATE_XRAY: u16 = 303;
 pub const ID_EXIT: u16 = 999;
 pub const ID_SING_CONFIG_BASE: u16 = 1000;
 pub const ID_XRAY_CONFIG_BASE: u16 = 2000;
@@ -89,6 +94,7 @@ pub unsafe fn add_icon(hwnd: HWND, h_instance: HINSTANCE, work_dir: &Path) -> Re
         return Err("添加系统托盘图标失败".to_string());
     }
 
+    let _ = TRAY_HWND.set(hwnd as isize);
     Ok(())
 }
 
@@ -105,6 +111,37 @@ pub fn show_error(hwnd: HWND, title: &str, message: &str) {
         let title = crate::wide(title);
         let message = crate::wide(message);
         MessageBoxW(hwnd, message.as_ptr(), title.as_ptr(), MB_OK | MB_ICONERROR);
+    }
+}
+
+pub fn set_tooltip(text: &str) {
+    if let Some(&hwnd_val) = TRAY_HWND.get() {
+        let hwnd = hwnd_val as HWND;
+        unsafe {
+            let mut nid: NOTIFYICONDATAW = zeroed();
+            nid.cbSize = size_of::<NOTIFYICONDATAW>() as u32;
+            nid.hWnd = hwnd;
+            nid.uID = TRAY_UID;
+            nid.uFlags = NIF_TIP;
+            crate::set_wstr_array(&mut nid.szTip, text);
+            Shell_NotifyIconW(NIM_MODIFY, &nid);
+        }
+    }
+}
+
+pub fn show_balloon(title: &str, message: &str) {
+    if let Some(&hwnd_val) = TRAY_HWND.get() {
+        let hwnd = hwnd_val as HWND;
+        unsafe {
+            let mut nid: NOTIFYICONDATAW = zeroed();
+            nid.cbSize = size_of::<NOTIFYICONDATAW>() as u32;
+            nid.hWnd = hwnd;
+            nid.uID = TRAY_UID;
+            nid.uFlags = NIF_INFO;
+            crate::set_wstr_array(&mut nid.szInfoTitle, title);
+            crate::set_wstr_array(&mut nid.szInfo, message);
+            Shell_NotifyIconW(NIM_MODIFY, &nid);
+        }
     }
 }
 
@@ -203,7 +240,9 @@ unsafe fn show_tray_menu(hwnd: HWND) -> u16 {
     append_item(stop_menu, ID_STOP_SING, "终止 sing-box");
     append_item(stop_menu, ID_STOP_XRAY, "终止 xray");
 
-    append_item(update_menu, ID_UPDATE_CORE, "更新 sing-box / xray / jq");
+    append_item(update_menu, ID_UPDATE_ALL, "更新 sing-box 和 xray");
+    append_item(update_menu, ID_UPDATE_SING, "更新 sing-box");
+    append_item(update_menu, ID_UPDATE_XRAY, "更新 xray");
 
     app.config_actions.clear();
     append_config_items(
