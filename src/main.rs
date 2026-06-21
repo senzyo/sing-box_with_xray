@@ -203,31 +203,30 @@ fn run_config_action(id: u16) -> Result<(), String> {
 fn randomize_tun_name(config_path: &Path) -> Result<(), String> {
     let text =
         fs::read_to_string(config_path).map_err(|e| format!("读取 sing-box 配置失败: {e}"))?;
-    let mut json: Value =
+    let json: Value =
         serde_json::from_str(&text).map_err(|e| format!("解析 sing-box 配置失败: {e}"))?;
     let new_name = random_hex_name();
-    let mut changed = false;
 
-    if let Some(inbounds) = json.get_mut("inbounds").and_then(Value::as_array_mut) {
-        for inbound in inbounds {
-            if inbound.get("type").and_then(Value::as_str) == Some("tun") {
-                if let Some(obj) = inbound.as_object_mut() {
-                    obj.insert(
-                        "interface_name".to_string(),
-                        Value::String(new_name.clone()),
-                    );
-                    changed = true;
+    let old_name = json
+        .get("inbounds")
+        .and_then(Value::as_array)
+        .and_then(|inbounds| {
+            inbounds.iter().find_map(|inbound| {
+                if inbound.get("type").and_then(Value::as_str) == Some("tun") {
+                    inbound.get("interface_name").and_then(Value::as_str)
+                } else {
+                    None
                 }
-            }
-        }
+            })
+        })
+        .ok_or("未在 sing-box.json 中找到 type=tun 的 inbound".to_string())?;
+
+    if old_name == new_name {
+        return Ok(());
     }
 
-    if !changed {
-        return Err("未在 sing-box.json 中找到 type=tun 的 inbound".to_string());
-    }
-
-    let text = serde_json::to_string_pretty(&json).map_err(|e| e.to_string())?;
-    fs::write(config_path, text).map_err(|e| format!("写入 sing-box 配置失败: {e}"))
+    let new_text = text.replacen(old_name, &new_name, 1);
+    fs::write(config_path, new_text).map_err(|e| format!("写入 sing-box 配置失败: {e}"))
 }
 
 fn random_hex_name() -> String {
