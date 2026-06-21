@@ -192,17 +192,16 @@ unsafe fn show_tray_menu(hwnd: HWND) -> u16 {
     let restart_menu = CreatePopupMenu();
     let stop_menu = CreatePopupMenu();
     let update_menu = CreatePopupMenu();
-    let switch_menu = CreatePopupMenu();
     let sing_menu = CreatePopupMenu();
     let xray_menu = CreatePopupMenu();
 
+    append_item(restart_menu, ID_RESTART_ALL, "重启 sing-box 和 xray");
     append_item(restart_menu, ID_RESTART_SING, "重启 sing-box");
     append_item(restart_menu, ID_RESTART_XRAY, "重启 xray");
-    append_item(restart_menu, ID_RESTART_ALL, "重启 sing-box 和 xray");
 
+    append_item(stop_menu, ID_STOP_ALL, "终止 sing-box 和 xray");
     append_item(stop_menu, ID_STOP_SING, "终止 sing-box");
     append_item(stop_menu, ID_STOP_XRAY, "终止 xray");
-    append_item(stop_menu, ID_STOP_ALL, "终止 sing-box 和 xray");
 
     append_item(update_menu, ID_UPDATE_CORE, "更新 sing-box / xray / jq");
 
@@ -222,13 +221,11 @@ unsafe fn show_tray_menu(hwnd: HWND) -> u16 {
         &[work_dir.join("configs").join("xray")],
     );
 
-    append_submenu(switch_menu, sing_menu, "切换 sing-box 配置");
-    append_submenu(switch_menu, xray_menu, "切换 xray 配置");
-
-    append_submenu(menu, restart_menu, "重启");
-    append_submenu(menu, stop_menu, "终止");
-    append_submenu(menu, update_menu, "更新");
-    append_submenu(menu, switch_menu, "切换配置文件");
+    append_submenu(menu, restart_menu, "重新启动");
+    append_submenu(menu, stop_menu, "终止运行");
+    append_submenu(menu, update_menu, "更新核心");
+    append_submenu(menu, sing_menu, "切换 sing-box 配置");
+    append_submenu(menu, xray_menu, "切换 xray 配置");
     AppendMenuW(menu, MF_SEPARATOR, 0, null());
     append_item(menu, ID_EXIT, "退出托盘程序");
 
