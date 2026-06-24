@@ -21,10 +21,13 @@ use windows_sys::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS,
 };
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
-use windows_sys::Win32::System::Threading::CREATE_NO_WINDOW;
+use windows_sys::Win32::System::Threading::{
+    CREATE_NO_WINDOW, OpenProcess, TerminateProcess, PROCESS_TERMINATE,
+};
 use windows_sys::Win32::Devices::DeviceAndDriverInstallation::{
     CM_Get_DevNode_Status, CM_Get_Device_ID_ListW, CM_Get_Device_ID_List_SizeW,
-    CM_Locate_DevNodeW, CR_SUCCESS, DN_HAS_PROBLEM, DN_STARTED,
+    CM_Locate_DevNodeW, CM_Query_And_Remove_SubTreeW, CM_Reenumerate_DevNode,
+    CR_SUCCESS, DN_HAS_PROBLEM, DN_STARTED,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::DestroyWindow;
 
@@ -95,20 +98,9 @@ fn run() -> Result<(), String> {
 
     let tooltip = {
         let mut app = app_state_mut().ok_or("应用状态不可用")?;
-        let sing_exe = app.work_dir.join("sing-box.exe");
-        let xray_exe = app.work_dir.join("xray.exe");
-        app.sing_box_version = if sing_exe.exists() {
-            let v = update::get_local_version(&sing_exe, "version");
-            if v != "0.0.0" { Some(v) } else { None }
-        } else {
-            None
-        };
-        app.xray_version = if xray_exe.exists() {
-            let v = update::get_local_version(&xray_exe, "version");
-            if v != "0.0.0" { Some(v) } else { None }
-        } else {
-            None
-        };
+        let (sing_ver, xray_ver) = detect_versions(&app.work_dir);
+        app.sing_box_version = sing_ver;
+        app.xray_version = xray_ver;
         format_tooltip(app.sing_box_version.as_deref(), app.xray_version.as_deref())
     };
 
@@ -208,12 +200,42 @@ fn stop_all() -> Result<(), String> {
 
 fn stop_processes(processes: &[&str]) -> Result<(), String> {
     for process in processes {
-        let _ = hidden_command("taskkill")
-            .args(["/F", "/IM", process])
-            .status();
+        kill_processes_by_name(process);
     }
     flush_dns();
     Ok(())
+}
+
+fn kill_processes_by_name(exe_name: &str) {
+    unsafe {
+        let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+        if snapshot == INVALID_HANDLE_VALUE {
+            return;
+        }
+
+        let mut entry: PROCESSENTRY32W = std::mem::zeroed();
+        entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
+
+        if Process32FirstW(snapshot, &mut entry) != 0 {
+            loop {
+                let end = entry.szExeFile.iter().position(|&c| c == 0).unwrap_or(entry.szExeFile.len());
+                let name_bytes = &entry.szExeFile[..end];
+                let name = String::from_utf16_lossy(name_bytes);
+                if name.eq_ignore_ascii_case(exe_name) {
+                    let handle = OpenProcess(PROCESS_TERMINATE, 0, entry.th32ProcessID);
+                    if !handle.is_null() {
+                        TerminateProcess(handle, 1);
+                        CloseHandle(handle);
+                    }
+                }
+                if Process32NextW(snapshot, &mut entry) == 0 {
+                    break;
+                }
+            }
+        }
+
+        CloseHandle(snapshot);
+    }
 }
 
 fn start_sing_box() -> Result<(), String> {
@@ -331,8 +353,13 @@ fn hidden_command(program: impl AsRef<OsStr>) -> Command {
     run_hidden_program(program)
 }
 
+#[link(name = "dnsapi")]
+extern "system" {
+    fn DnsFlushResolverCache() -> i32;
+}
+
 fn flush_dns() {
-    let _ = hidden_command("ipconfig").arg("/flushdns").status();
+    unsafe { DnsFlushResolverCache(); }
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -342,7 +369,7 @@ enum ProcessState {
     Running,
 }
 
-fn sing_box_state(app: &mut AppState) -> ProcessState {
+fn sing_box_state(app: &AppState) -> ProcessState {
     if !app.work_dir.join("sing-box.exe").exists() {
         return ProcessState::NotInstalled;
     }
@@ -353,7 +380,7 @@ fn sing_box_state(app: &mut AppState) -> ProcessState {
     }
 }
 
-fn xray_state(app: &mut AppState) -> ProcessState {
+fn xray_state(app: &AppState) -> ProcessState {
     if !app.work_dir.join("xray.exe").exists() {
         return ProcessState::NotInstalled;
     }
@@ -395,9 +422,7 @@ fn is_process_running(exe_name: &str) -> bool {
 }
 
 fn cleanup_orphaned_wintun() {
-    const CR_NO_SUCH_DEVNODE: u32 = 0x0D;
-
-    let mut instance_ids: Vec<String> = Vec::new();
+    let mut removed = false;
 
     unsafe {
         let mut size = 0u32;
@@ -430,15 +455,14 @@ fn cleanup_orphaned_wintun() {
                 let wide_id = wide(&id);
                 let locate_ret = CM_Locate_DevNodeW(&mut dev_inst, wide_id.as_ptr(), 0);
 
-                if locate_ret == CR_NO_SUCH_DEVNODE {
-                    instance_ids.push(id);
-                } else if locate_ret == CR_SUCCESS {
+                if locate_ret == CR_SUCCESS {
                     let mut status = 0u32;
                     let mut problem = 0u32;
                     if CM_Get_DevNode_Status(&mut status, &mut problem, dev_inst, 0) == CR_SUCCESS
                         && ((status & DN_STARTED) == 0 || (status & DN_HAS_PROBLEM) != 0)
                     {
-                        instance_ids.push(id);
+                        CM_Query_And_Remove_SubTreeW(dev_inst, null_mut(), null_mut(), 0, 0);
+                        removed = true;
                     }
                 }
             }
@@ -447,14 +471,8 @@ fn cleanup_orphaned_wintun() {
         }
     }
 
-    for id in &instance_ids {
-        let _ = hidden_command("pnputil")
-            .args(["/remove-device", id.as_str()])
-            .status();
-    }
-
-    if !instance_ids.is_empty() {
-        let _ = hidden_command("pnputil").arg("/scan-devices").status();
+    if removed {
+        unsafe { CM_Reenumerate_DevNode(0, 0); }
     }
 }
 
@@ -552,6 +570,20 @@ fn set_wstr_array<const N: usize>(target: &mut [u16; N], value: &str) {
     target[len] = 0;
 }
 
+fn detect_versions(work_dir: &Path) -> (Option<String>, Option<String>) {
+    let sing_exe = work_dir.join("sing-box.exe");
+    let xray_exe = work_dir.join("xray.exe");
+    let sing_ver = if sing_exe.exists() {
+        let v = update::get_local_version(&sing_exe, "version");
+        if v != "0.0.0" { Some(v) } else { None }
+    } else { None };
+    let xray_ver = if xray_exe.exists() {
+        let v = update::get_local_version(&xray_exe, "version");
+        if v != "0.0.0" { Some(v) } else { None }
+    } else { None };
+    (sing_ver, xray_ver)
+}
+
 fn format_tooltip(sing_ver: Option<&str>, xray_ver: Option<&str>) -> String {
     let sing = match sing_ver {
         Some(v) => format!("sing-box v{}", v),
@@ -566,20 +598,9 @@ fn format_tooltip(sing_ver: Option<&str>, xray_ver: Option<&str>) -> String {
 
 fn refresh_versions_and_tooltip(work_dir: &Path) {
     if let Some(mut app) = app_state_mut() {
-        let sing_exe = work_dir.join("sing-box.exe");
-        let xray_exe = work_dir.join("xray.exe");
-        app.sing_box_version = if sing_exe.exists() {
-            let v = update::get_local_version(&sing_exe, "version");
-            if v != "0.0.0" { Some(v) } else { None }
-        } else {
-            None
-        };
-        app.xray_version = if xray_exe.exists() {
-            let v = update::get_local_version(&xray_exe, "version");
-            if v != "0.0.0" { Some(v) } else { None }
-        } else {
-            None
-        };
+        let (sing_ver, xray_ver) = detect_versions(work_dir);
+        app.sing_box_version = sing_ver;
+        app.xray_version = xray_ver;
         let tooltip = format_tooltip(app.sing_box_version.as_deref(), app.xray_version.as_deref());
         drop(app);
         tray::set_tooltip(&tooltip);

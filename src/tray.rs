@@ -257,8 +257,8 @@ unsafe fn show_tray_menu(hwnd: HWND) -> u16 {
 
     let menu = CreatePopupMenu();
 
-    let sing_state = crate::sing_box_state(&mut app);
-    let xray_state = crate::xray_state(&mut app);
+    let sing_state = crate::sing_box_state(&app);
+    let xray_state = crate::xray_state(&app);
     let work_dir = app.work_dir.clone();
 
     let status_hbmp = |s: ProcessState| match s {
