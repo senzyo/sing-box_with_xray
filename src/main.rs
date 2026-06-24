@@ -26,8 +26,7 @@ use windows_sys::Win32::System::Threading::{
 };
 use windows_sys::Win32::Devices::DeviceAndDriverInstallation::{
     CM_Get_DevNode_Status, CM_Get_Device_ID_ListW, CM_Get_Device_ID_List_SizeW,
-    CM_Locate_DevNodeW, CM_Query_And_Remove_SubTreeW, CM_Reenumerate_DevNode,
-    CR_SUCCESS, DN_HAS_PROBLEM, DN_STARTED,
+    CM_Locate_DevNodeW, CR_SUCCESS, DN_HAS_PROBLEM, DN_STARTED,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::DestroyWindow;
 
@@ -422,7 +421,9 @@ fn is_process_running(exe_name: &str) -> bool {
 }
 
 fn cleanup_orphaned_wintun() {
-    let mut removed = false;
+    const CR_NO_SUCH_DEVNODE: u32 = 0x0D;
+
+    let mut instance_ids: Vec<String> = Vec::new();
 
     unsafe {
         let mut size = 0u32;
@@ -455,14 +456,15 @@ fn cleanup_orphaned_wintun() {
                 let wide_id = wide(&id);
                 let locate_ret = CM_Locate_DevNodeW(&mut dev_inst, wide_id.as_ptr(), 0);
 
-                if locate_ret == CR_SUCCESS {
+                if locate_ret == CR_NO_SUCH_DEVNODE {
+                    instance_ids.push(id);
+                } else if locate_ret == CR_SUCCESS {
                     let mut status = 0u32;
                     let mut problem = 0u32;
                     if CM_Get_DevNode_Status(&mut status, &mut problem, dev_inst, 0) == CR_SUCCESS
                         && ((status & DN_STARTED) == 0 || (status & DN_HAS_PROBLEM) != 0)
                     {
-                        CM_Query_And_Remove_SubTreeW(dev_inst, null_mut(), null_mut(), 0, 0);
-                        removed = true;
+                        instance_ids.push(id);
                     }
                 }
             }
@@ -471,8 +473,14 @@ fn cleanup_orphaned_wintun() {
         }
     }
 
-    if removed {
-        unsafe { CM_Reenumerate_DevNode(0, 0); }
+    for id in &instance_ids {
+        let _ = hidden_command("pnputil")
+            .args(["/remove-device", id.as_str()])
+            .status();
+    }
+
+    if !instance_ids.is_empty() {
+        let _ = hidden_command("pnputil").arg("/scan-devices").status();
     }
 }
 
