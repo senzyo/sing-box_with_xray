@@ -1,5 +1,6 @@
 /target/
 /ui/
+/logs/
 *.exe
 cache.db
 TODO.md

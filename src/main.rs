@@ -17,10 +17,17 @@ use std::process::{Command, Stdio};
 use std::ptr::null;
 use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
-use tracing::{info, warn};
+use time::OffsetDateTime;
+use tracing::{info, warn, Event};
 use tracing_subscriber::filter::EnvFilter;
+use tracing_subscriber::fmt::format::Writer;
+use tracing_subscriber::fmt::{FmtContext, FormatEvent, FormatFields};
 use tracing_subscriber::prelude::*;
 use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED};
+use windows::Win32::System::Console::{
+    GetStdHandle, SetConsoleMode, GetConsoleMode, CONSOLE_MODE,
+    ENABLE_VIRTUAL_TERMINAL_PROCESSING, STD_ERROR_HANDLE,
+};
 use windows::Win32::Foundation::{CloseHandle, HWND};
 use windows::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS,
@@ -65,22 +72,102 @@ fn main() {
     }
 }
 
+struct BracketedLevel;
+
+const ANSI_RESET: &str = "\x1b[0m";
+const ANSI_GREEN: &str = "\x1b[32m";
+const ANSI_YELLOW: &str = "\x1b[33m";
+const ANSI_RED: &str = "\x1b[31m";
+const ANSI_BLUE: &str = "\x1b[34m";
+
+fn level_color(level: &tracing::Level) -> &'static str {
+    match *level {
+        tracing::Level::INFO => ANSI_GREEN,
+        tracing::Level::WARN => ANSI_YELLOW,
+        tracing::Level::ERROR => ANSI_RED,
+        tracing::Level::DEBUG => ANSI_BLUE,
+        _ => "",
+    }
+}
+
+impl<S, N> FormatEvent<S, N> for BracketedLevel
+where
+    S: tracing::Subscriber + for<'a> tracing_subscriber::registry::LookupSpan<'a>,
+    N: for<'a> FormatFields<'a> + 'static,
+{
+    fn format_event(
+        &self,
+        ctx: &FmtContext<'_, S, N>,
+        mut writer: Writer<'_>,
+        event: &Event<'_>,
+    ) -> std::fmt::Result {
+        let now = OffsetDateTime::now_utc();
+        let level = event.metadata().level();
+        let color = level_color(level);
+        let reset = if writer.has_ansi_escapes() { ANSI_RESET } else { "" };
+        let lc = if writer.has_ansi_escapes() { color } else { "" };
+        write!(
+            &mut writer,
+            "{}{:03}Z [{lc}{level}{reset}] ",
+            now.format(time::macros::format_description!(
+                "[year]-[month]-[day]T[hour]:[minute]:[second]"
+            ))
+            .map_err(|_| std::fmt::Error)?,
+            now.millisecond(),
+        )?;
+        ctx.field_format().format_fields(writer.by_ref(), event)?;
+        writeln!(writer)
+    }
+}
+
 fn init_logging(work_dir: &Path) -> Result<(), String> {
-    let log_dir = work_dir.join("logs");
-    fs::create_dir_all(&log_dir).map_err(|e| format!("创建日志目录失败: {e}"))?;
-    let file = std::fs::File::create(log_dir.join("app.log"))
-        .map_err(|e| format!("创建日志文件失败: {e}"))?;
+    unsafe {
+        let Ok(handle) = GetStdHandle(STD_ERROR_HANDLE) else { return Ok(()); };
+        let mut mode = CONSOLE_MODE::default();
+        if GetConsoleMode(handle, &mut mode).is_ok() {
+            let _ = SetConsoleMode(handle, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
+        }
+    }
+
     let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new("info"));
-    let file_layer = tracing_subscriber::fmt::layer()
-        .with_writer(file)
+        .unwrap_or_else(|_| EnvFilter::new("debug"));
+
+    let console_layer = tracing_subscriber::fmt::layer()
         .with_target(false)
         .compact()
-        .with_filter(filter);
-    tracing_subscriber::registry()
-        .with(file_layer)
-        .try_init()
-        .map_err(|e| format!("初始化日志系统失败: {e}"))?;
+        .event_format(BracketedLevel)
+        .with_writer(std::io::stderr);
+
+    #[cfg(debug_assertions)]
+    {
+        let log_dir = work_dir.join("logs");
+        fs::create_dir_all(&log_dir).map_err(|e| format!("创建日志目录失败: {e}"))?;
+        let file = std::fs::File::create(log_dir.join("app.log"))
+            .map_err(|e| format!("创建日志文件失败: {e}"))?;
+        let file_layer = tracing_subscriber::fmt::layer()
+            .with_ansi(false)
+            .with_target(false)
+            .compact()
+            .event_format(BracketedLevel)
+            .with_writer(file);
+
+        tracing_subscriber::registry()
+            .with(file_layer)
+            .with(console_layer)
+            .with(filter)
+            .try_init()
+            .map_err(|e| format!("初始化日志系统失败: {e}"))?;
+    }
+
+    #[cfg(not(debug_assertions))]
+    {
+        tracing_subscriber::registry()
+            .with(console_layer)
+            .with(filter)
+            .try_init()
+            .map_err(|e| format!("初始化日志系统失败: {e}"))?;
+    }
+
     Ok(())
 }
 
@@ -168,6 +255,16 @@ fn execute_menu_command(hwnd: isize, id: u16) {
                 unsafe {
                     let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
                 }
+                let label = match id {
+                    tray::ID_RESTART_SING => "重启 sing-box",
+                    tray::ID_RESTART_XRAY => "重启 xray",
+                    tray::ID_RESTART_ALL => "重启所有服务",
+                    tray::ID_STOP_SING => "终止 sing-box",
+                    tray::ID_STOP_XRAY => "终止 xray",
+                    tray::ID_STOP_ALL => "终止所有服务",
+                    _ => "",
+                };
+                info!("{label}");
                 let result = match id {
                     tray::ID_RESTART_SING => restart_sing_box_at(&work_dir),
                     tray::ID_RESTART_XRAY => restart_xray_at(&work_dir),
@@ -203,6 +300,13 @@ fn execute_menu_command(hwnd: isize, id: u16) {
                 unsafe {
                     let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
                 }
+                let label = match id {
+                    tray::ID_UPDATE_ALL => "更新所有核心",
+                    tray::ID_UPDATE_SING => "更新 sing-box",
+                    tray::ID_UPDATE_XRAY => "更新 xray",
+                    _ => "",
+                };
+                info!("{label}");
                 let result = match id {
                     tray::ID_UPDATE_ALL => update::update_cores(&work_dir, sing_ver.as_deref(), xray_ver.as_deref()),
                     tray::ID_UPDATE_SING => update::update_sing_box(&work_dir, sing_ver.as_deref()),
@@ -234,26 +338,22 @@ fn execute_menu_command(hwnd: isize, id: u16) {
 }
 
 fn restart_all_at(work_dir: &Path) -> Result<(), String> {
-    info!("重启所有服务");
     stop_all()?;
     start_sing_box_at(work_dir)?;
     start_xray_at(work_dir)
 }
 
 fn restart_sing_box_at(work_dir: &Path) -> Result<(), String> {
-    info!("重启 sing-box");
     stop_processes(&["sing-box.exe"])?;
     start_sing_box_at(work_dir)
 }
 
 fn restart_xray_at(work_dir: &Path) -> Result<(), String> {
-    info!("重启 xray");
     stop_processes(&["xray.exe"])?;
     start_xray_at(work_dir)
 }
 
 fn stop_all() -> Result<(), String> {
-    info!("终止所有服务");
     stop_processes(&["sing-box.exe", "xray.exe"])
 }
 
@@ -368,6 +468,7 @@ fn run_config_action(id: u16) -> Result<(), String> {
     };
 
     let work_dir = work_dir()?;
+    info!("切换配置: {}", action.path.display());
     match action.kind {
         ConfigKind::SingBox => {
             fs::copy(&action.path, work_dir.join("sing-box.json"))
