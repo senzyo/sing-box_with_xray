@@ -86,7 +86,7 @@ function CheckUpdate ($ExeName, $VersionArg) {
 }
 # ========== 公共函数 [结束] ==========
 
-$WorkDir = "$env:USERPROFILE\Apps\sing-box-with-xray"
+$WorkDir = "$env:USERPROFILE\Apps\sing-box_with_xray"
 
 # ========== 更新 sing-box [开始] ==========
 Write-Host "${Cyan}[提示]${NC} 正在检查更新 sing-box"

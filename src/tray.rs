@@ -61,7 +61,7 @@ pub unsafe fn create_window(h_instance: isize) -> Result<isize, String> {
         return Err("注册托盘窗口类失败".to_string());
     }
 
-    let title = to_wide("sing-box-with-xray");
+    let title = to_wide("sing-box_with_xray");
     let hwnd = CreateWindowExW(
         Default::default(),
         PCWSTR(class_name.as_ptr()),
@@ -89,7 +89,7 @@ pub unsafe fn add_icon(hwnd: isize, h_instance: isize, exe_dir: &Path) -> Result
         uFlags: NIF_MESSAGE | NIF_ICON | NIF_TIP,
         uCallbackMessage: WM_TRAY_ICON,
         hIcon: icon,
-        szTip: to_wide_padded("sing-box-with-xray"),
+        szTip: to_wide_padded("sing-box_with_xray"),
         ..Default::default()
     };
 
