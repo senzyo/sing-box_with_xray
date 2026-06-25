@@ -14,6 +14,20 @@ use std::process::Command;
 /// GitHub API 要求的 User-Agent 头，缺少会返回 403。
 const USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36 Edg/149.0.0.0";
 
+// 编译时根据目标架构确定下载文件名。
+// amd64 编译产物只下载 amd64 核心，arm64 编译产物只下载 arm64 核心。
+const SINGBOX_ARCH_SUFFIX: &str = if cfg!(target_arch = "aarch64") {
+    "arm64"
+} else {
+    "amd64"
+};
+
+const XRAY_ZIP_NAME: &str = if cfg!(target_arch = "aarch64") {
+    "Xray-windows-arm64-v8a.zip"
+} else {
+    "Xray-windows-64.zip"
+};
+
 /// 依次更新 sing-box 和 xray。
 pub fn update_cores(
     exe_dir: &Path,
@@ -45,7 +59,7 @@ pub fn update_sing_box(exe_dir: &Path, local_version: Option<&str>, gh_proxy_ena
         return Ok(());
     }
 
-    let zip_name = format!("sing-box-{}-windows-amd64.zip", remote_ver);
+    let zip_name = format!("sing-box-{}-windows-{}.zip", remote_ver, SINGBOX_ARCH_SUFFIX);
     let zip_path = exe_dir.join(&zip_name);
 
     let download_url = match find_asset_url(&assets, &zip_name) {
@@ -75,7 +89,7 @@ pub fn update_sing_box(exe_dir: &Path, local_version: Option<&str>, gh_proxy_ena
         return Ok(());
     }
 
-    let exe_in_zip = format!("sing-box-{}-windows-amd64/sing-box.exe", remote_ver);
+    let exe_in_zip = format!("sing-box-{}-windows-{}/sing-box.exe", remote_ver, SINGBOX_ARCH_SUFFIX);
     replace_exe_from_zip(&zip_path, &exe_in_zip, &exe_path)?;
 
     let _ = fs::remove_file(&zip_path);
@@ -99,7 +113,7 @@ pub fn update_xray(exe_dir: &Path, local_version: Option<&str>, gh_proxy_enabled
         return Ok(());
     }
 
-    let zip_name = "Xray-windows-64.zip";
+    let zip_name = XRAY_ZIP_NAME;
     let zip_path = exe_dir.join(zip_name);
 
     let download_url = match find_asset_url(&assets, zip_name) {
