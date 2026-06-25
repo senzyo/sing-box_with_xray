@@ -1,3 +1,8 @@
+//! Windows 系统托盘 UI。
+//!
+//! 负责创建隐藏窗口、注册托盘图标、构建右键弹出菜单（重启/终止/更新/切换配置/退出），
+//! 处理鼠标消息并将菜单事件分发给 `main::execute_menu_command`。
+
 use std::mem::size_of;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
@@ -27,11 +32,14 @@ use windows::Win32::UI::WindowsAndMessaging::{
 
 use crate::{AppState, ConfigAction, ConfigKind, ProcessState};
 
+/// 托盘图标的自定义消息 ID，当托盘收到鼠标事件时通过此消息通知窗口。
 pub const WM_TRAY_ICON: u32 = WM_APP + 1;
 const TRAY_UID: u32 = 1;
 
 static TRAY_HWND: OnceLock<isize> = OnceLock::new();
 
+// 菜单 ID 分段规划：101-199 重启，201-299 终止，301-399 更新，999 退出，
+// 1000-1999 sing-box 配置，2000-2999 xray 配置。
 pub const ID_RESTART_SING: u16 = 101;
 pub const ID_RESTART_XRAY: u16 = 102;
 pub const ID_RESTART_ALL: u16 = 103;
@@ -45,6 +53,7 @@ pub const ID_EXIT: u16 = 999;
 pub const ID_SING_CONFIG_BASE: u16 = 1000;
 pub const ID_XRAY_CONFIG_BASE: u16 = 2000;
 
+/// 创建托盘图标所依附的隐藏窗口。返回窗口句柄。
 pub unsafe fn create_window(h_instance: isize) -> Result<isize, String> {
     let h_instance = HINSTANCE(h_instance as _);
     let class_name = to_wide("SingBoxWithXrayTrayWindow");
@@ -78,6 +87,7 @@ pub unsafe fn create_window(h_instance: isize) -> Result<isize, String> {
     Ok(hwnd.0 as isize)
 }
 
+/// 向系统托盘添加图标并注册鼠标事件回调。
 pub unsafe fn add_icon(hwnd: isize, h_instance: isize, exe_dir: &Path) -> Result<(), String> {
     let hwnd = HWND(hwnd as _);
     let h_instance = HINSTANCE(h_instance as _);
@@ -101,6 +111,7 @@ pub unsafe fn add_icon(hwnd: isize, h_instance: isize, exe_dir: &Path) -> Result
     Ok(())
 }
 
+/// 运行 Windows 消息循环，阻塞直到窗口被销毁。
 pub unsafe fn run_message_loop() {
     let mut msg: MSG = Default::default();
     while GetMessageW(&mut msg, None, 0, 0).as_bool() {
@@ -109,6 +120,7 @@ pub unsafe fn run_message_loop() {
     }
 }
 
+/// 显示错误消息对话框。
 pub fn show_error(hwnd: isize, title: &str, message: &str) {
     let hwnd = if hwnd == 0 { None } else { Some(HWND(hwnd as _)) };
     unsafe {
@@ -116,6 +128,7 @@ pub fn show_error(hwnd: isize, title: &str, message: &str) {
     }
 }
 
+/// 更新托盘图标的悬停提示文本。
 pub fn set_tooltip(text: &str) {
     if let Some(&hwnd_val) = TRAY_HWND.get() {
         let hwnd = HWND(hwnd_val as _);
@@ -133,6 +146,11 @@ pub fn set_tooltip(text: &str) {
     }
 }
 
+/// 从 ICO 文件加载图标并转换为 32 位 DIB 位图句柄。
+///
+/// 流程：LoadImageW 加载 ICO → 创建兼容 DC → 创建 DIB Section →
+/// DrawIconEx 绘制到位图 → 清理中间资源 → 返回位图句柄。
+/// 菜单项需要位图句柄（而非图标句柄）来显示状态图标。
 pub(crate) unsafe fn load_icon_bitmap(exe_dir: &Path, icon_name: &str) -> isize {
     let icon_path = exe_dir.join("icons").join(icon_name);
     if !icon_path.exists() {
@@ -203,6 +221,7 @@ pub(crate) unsafe fn load_icon_bitmap(exe_dir: &Path, icon_name: &str) -> isize 
     bmp.0 as isize
 }
 
+/// 窗口过程：处理托盘图标鼠标事件和窗口销毁。
 unsafe extern "system" fn wnd_proc(
     hwnd: HWND,
     msg: u32,
@@ -257,6 +276,7 @@ unsafe fn remove_tray_icon(hwnd: HWND) {
     let _ = Shell_NotifyIconW(NIM_DELETE, &nid);
 }
 
+/// 构建并显示右键弹出菜单，返回用户选择的菜单项 ID（0 表示取消）。
 unsafe fn show_tray_menu(hwnd: HWND) -> u16 {
     let mut app = match crate::app_state_mut() {
         Some(app) => app,
@@ -361,6 +381,9 @@ unsafe fn append_disabled_item(menu: HMENU, label: &str) {
     let _ = AppendMenuW(menu, MF_STRING | MF_GRAYED, 0, PCWSTR(w.as_ptr()));
 }
 
+/// 添加带状态位图的菜单项（仅显示，不可点击）。
+/// 先 AppendMenuW 创建文本项，再 SetMenuItemInfoW 设置位图——
+/// 这是 Win32 菜单项附加位图的标准做法。
 unsafe fn append_status_item(menu: HMENU, label: &str, hbmp: isize) {
     let w = to_wide(label);
     let position = GetMenuItemCount(Some(menu)) as u32;
@@ -384,6 +407,7 @@ unsafe fn append_submenu(menu: HMENU, submenu: HMENU, label: &str) {
     let _ = AppendMenuW(menu, MF_STRING | MF_POPUP, submenu.0 as usize, PCWSTR(w.as_ptr()));
 }
 
+/// 扫描配置目录并将每个 .json 文件添加为菜单项，最多 900 项。
 unsafe fn append_config_items(
     app: &mut AppState,
     menu: HMENU,
@@ -423,6 +447,9 @@ fn to_wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(Some(0)).collect()
 }
 
+/// 将字符串转为 UTF-16 并填充到固定长度缓冲区。
+/// `N` 是缓冲区长度（含 null 终止符），超出部分被截断。
+/// NOTIFYICONDATAW.szTip 要求 128 个 u16 的固定长度数组。
 fn to_wide_padded<const N: usize>(s: &str) -> [u16; N] {
     let mut buf = [0u16; N];
     let wide = to_wide(s);

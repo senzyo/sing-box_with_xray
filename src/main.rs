@@ -1,3 +1,9 @@
+//! 程序入口与核心逻辑。
+//!
+//! 负责应用生命周期管理（启动、运行、退出）、sing-box / xray 子进程的
+//! 启停控制、系统托盘菜单分发、TUN 接口名随机化、DNS 缓存清理，
+//! 以及孤立 WinTUN 设备节点的清理。
+
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod error;
@@ -55,17 +61,22 @@ struct ConfigAction {
     path: PathBuf,
 }
 
+/// 全局应用状态。
 struct AppState {
+    /// 可执行文件所在目录，所有相对路径以此为基准。
     exe_dir: PathBuf,
+    /// 菜单项 ID → 配置文件路径的映射，用于配置切换。
     config_actions: HashMap<u16, ConfigAction>,
     sing_box_version: Option<String>,
     xray_version: Option<String>,
+    /// GDI 位图句柄：绿色（运行中）、黄色（未运行）、红色（未安装）。
     icon_green: isize,
     icon_yellow: isize,
     icon_red: isize,
     settings: settings::Settings,
 }
 
+/// 全局应用状态，通过 OnceLock + Mutex 实现线程安全的单例。
 static APP: OnceLock<Mutex<AppState>> = OnceLock::new();
 
 fn main() {
@@ -74,6 +85,7 @@ fn main() {
     }
 }
 
+/// 自定义日志格式：`{时间戳}{毫秒}Z [{级别}] {消息}`，级别带 ANSI 颜色。
 struct BracketedLevel;
 
 const ANSI_RESET: &str = "\x1b[0m";
@@ -122,7 +134,13 @@ where
     }
 }
 
+/// 初始化日志系统。
+///
+/// 1. 为 Windows 控制台启用 ANSI 转义码支持（彩色输出）
+/// 2. 创建 console_layer（stderr）和 file_layer（app.log）
+/// 3. 日志级别优先使用 RUST_LOG 环境变量，否则使用 settings.toml 中的配置
 fn init_logging(exe_dir: &Path, log_level: &str) -> Result<(), String> {
+    // 启用 Windows Terminal 的 ANSI 转义码处理，否则颜色代码会显示为乱码
     unsafe {
         let Ok(handle) = GetStdHandle(STD_ERROR_HANDLE) else { return Ok(()); };
         let mut mode = CONSOLE_MODE::default();
@@ -160,7 +178,10 @@ fn init_logging(exe_dir: &Path, log_level: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// 应用主入口：初始化 COM → 创建目录 → 加载配置 → 初始化日志和 Toast →
+/// 检测版本 → 创建托盘图标 → 运行消息循环 → 退出时清理 GDI 资源。
 fn run() -> Result<(), String> {
+    // 初始化 COM（单线程单元模式），Toast 通知和 ShellLink 都依赖 COM
     unsafe {
         CoInitializeEx(None, COINIT_APARTMENTTHREADED)
             .ok()
@@ -232,6 +253,11 @@ fn run() -> Result<(), String> {
     Ok(())
 }
 
+/// 分发托盘菜单命令。
+///
+/// 重启/终止/更新操作在独立线程中执行（避免阻塞 UI 线程），每个线程
+/// 独立初始化 COM。切换配置操作在当前线程同步执行。退出操作终止所有
+/// 进程并销毁窗口。
 fn execute_menu_command(hwnd: isize, id: u16) {
     let result = match id {
         tray::ID_RESTART_SING | tray::ID_RESTART_XRAY | tray::ID_RESTART_ALL |
@@ -243,6 +269,7 @@ fn execute_menu_command(hwnd: isize, id: u16) {
                     return;
                 }
             };
+            // 子线程需要独立初始化 COM，否则 Toast 通知会失败
             std::thread::spawn(move || {
                 unsafe {
                     let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
@@ -350,6 +377,7 @@ fn restart_xray_at(exe_dir: &Path) -> Result<(), String> {
     start_xray_at(exe_dir)
 }
 
+/// 终止所有已知子进程并刷新 DNS。
 fn stop_all() -> Result<(), String> {
     stop_processes(&["sing-box.exe", "xray.exe"])
 }
@@ -363,6 +391,7 @@ fn stop_processes(processes: &[&str]) -> Result<(), String> {
     Ok(())
 }
 
+/// 通过 Win32 ToolHelp API 枚举所有进程，终止与 `exe_name` 匹配的进程。
 fn kill_processes_by_name(exe_name: &str) {
     unsafe {
         let Ok(snapshot) = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) else {
@@ -393,6 +422,7 @@ fn kill_processes_by_name(exe_name: &str) {
     }
 }
 
+/// 启动 sing-box 子进程。启动前清理孤立 WinTUN 设备并随机化 TUN 接口名。
 fn start_sing_box_at(exe_dir: &Path) -> Result<(), String> {
     cleanup_orphaned_wintun();
 
@@ -426,6 +456,7 @@ fn start_sing_box_at(exe_dir: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// 启动 xray 子进程，stderr 输出重定向到日志。
 fn start_xray_at(exe_dir: &Path) -> Result<(), String> {
     let exe = exe_dir.join("core").join("xray.exe");
     let config = exe_dir.join("configs").join("xray.json");
@@ -454,6 +485,7 @@ fn start_xray_at(exe_dir: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// 执行配置切换操作：将选中的配置文件复制到活跃配置路径并重启对应服务。
 fn run_config_action(id: u16) -> Result<(), String> {
     let action = {
         let app = app_state().ok_or("应用状态不可用")?;
@@ -480,6 +512,12 @@ fn run_config_action(id: u16) -> Result<(), String> {
     }
 }
 
+/// 随机化 sing-box 配置中的 TUN 接口名。
+///
+/// sing-box TUN 适配器在 Windows 上以固定名称注册，重启时如果旧适配器
+/// 未完全释放会导致冲突。通过每次启动时生成随机 6 位十六进制名称来避免。
+///
+/// 使用字符串替换而非 JSON 序列化来保留原始配置的格式和注释。
 fn randomize_tun_name(config_path: &Path) -> Result<(), String> {
     let text =
         fs::read_to_string(config_path).map_err(|e| format!("读取 sing-box 配置失败: {e}"))?;
@@ -511,6 +549,8 @@ fn randomize_tun_name(config_path: &Path) -> Result<(), String> {
     fs::write(config_path, new_text).map_err(|e| format!("写入 sing-box 配置失败: {e}"))
 }
 
+/// 生成 6 位随机十六进制字符串，用作 TUN 接口名。
+/// 取纳秒时间戳的低 24 位（6 个十六进制字符），同一纳秒内重复调用可能冲突。
 fn random_hex_name() -> String {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -519,21 +559,25 @@ fn random_hex_name() -> String {
     format!("{:06x}", nanos & 0xFF_FFFF)
 }
 
+/// 创建不显示控制台窗口的子进程 Command。
 fn run_hidden_program(program: impl AsRef<OsStr>) -> Command {
     let mut command = Command::new(program);
     command.creation_flags(CREATE_NO_WINDOW.0);
     command
 }
 
+/// `run_hidden_program` 的别名，语义更清晰的调用入口。
 fn hidden_command(program: impl AsRef<OsStr>) -> Command {
     run_hidden_program(program)
 }
 
+// dnsapi.dll 导入，用于刷新系统 DNS 缓存。
 #[link(name = "dnsapi")]
 extern "system" {
     fn DnsFlushResolverCache() -> i32;
 }
 
+/// 刷新 DNS 缓存。代理进程终止后，残留的 DNS 缓存可能导致解析失败。
 fn flush_dns() {
     unsafe { DnsFlushResolverCache(); }
 }
@@ -567,6 +611,7 @@ fn xray_state(app: &AppState) -> ProcessState {
     }
 }
 
+/// 检查指定名称的进程是否正在运行。
 fn is_process_running(exe_name: &str) -> bool {
     unsafe {
         let Ok(snapshot) = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) else {
@@ -596,8 +641,19 @@ fn is_process_running(exe_name: &str) -> bool {
     }
 }
 
+/// 清理孤立或异常的 WinTUN 设备节点。
+///
+/// sing-box TUN 模式依赖 WinTUN 驱动，异常退出后可能残留无效设备节点，
+/// 导致下次启动时 TUN 接口创建失败。此函数：
+///
+/// 1. 通过 `CM_Get_Device_ID_ListW` 枚举所有设备实例 ID
+/// 2. 解析双 null 结尾的多字符串缓冲区
+/// 3. 筛选包含 "WINTUN" 的设备
+/// 4. 检查设备状态：设备节点不存在（CR_NO_SUCH_DEVNODE）或未启动 / 有异常
+/// 5. 通过 `pnputil /remove-device` 移除问题设备
+/// 6. 最后执行 `pnputil /scan-devices` 重新扫描硬件
 fn cleanup_orphaned_wintun() {
-    const CR_NO_SUCH_DEVNODE: u32 = 0x0D;
+    const CR_NO_SUCH_DEVNODE: u32 = 0x0D; // 设备节点不存在
 
     let mut instance_ids: Vec<String> = Vec::new();
 
@@ -635,6 +691,7 @@ fn cleanup_orphaned_wintun() {
                 if locate_ret == CR_NO_SUCH_DEVNODE {
                     instance_ids.push(id);
                 } else if locate_ret == CR_SUCCESS {
+                    // 设备存在，检查是否未启动或有异常问题
                     let mut status = 0u32;
                     let mut problem = 0u32;
                     if CM_Get_DevNode_Status(&mut status, &mut problem, dev_inst, 0) == CR_SUCCESS
@@ -668,6 +725,7 @@ fn ensure_exists(path: &Path) -> Result<(), String> {
     }
 }
 
+/// 从多个目录中收集所有 .json 文件，按文件名排序去重。
 fn find_json_configs(dirs: &[PathBuf]) -> Vec<PathBuf> {
     let mut paths = Vec::new();
 
@@ -699,6 +757,8 @@ fn app_state() -> Option<std::sync::MutexGuard<'static, AppState>> {
     APP.get()?.lock().ok()
 }
 
+/// 获取可变应用状态。与 `app_state()` 相同（Mutex::lock 返回可变守卫），
+/// 语义上区分只读和可变访问意图。
 fn app_state_mut() -> Option<std::sync::MutexGuard<'static, AppState>> {
     app_state()
 }
@@ -721,6 +781,8 @@ mod tests {
     }
 }
 
+/// 检测本地 sing-box 和 xray 的版本。
+/// 版本号为 "0.0.0" 表示可执行文件存在但无法获取版本，视为未安装。
 fn detect_versions(exe_dir: &Path) -> (Option<String>, Option<String>) {
     let sing_exe = exe_dir.join("core").join("sing-box.exe");
     let xray_exe = exe_dir.join("core").join("xray.exe");
@@ -735,6 +797,7 @@ fn detect_versions(exe_dir: &Path) -> (Option<String>, Option<String>) {
     (sing_ver, xray_ver)
 }
 
+/// 格式化托盘提示文本，显示两个核心的版本状态。
 fn format_tooltip(sing_ver: Option<&str>, xray_ver: Option<&str>) -> String {
     let sing = match sing_ver {
         Some(v) => format!("sing-box v{}", v),
@@ -747,6 +810,7 @@ fn format_tooltip(sing_ver: Option<&str>, xray_ver: Option<&str>) -> String {
     format!("{}\n{}", sing, xray)
 }
 
+/// 重新检测版本并更新托盘提示文本。
 fn refresh_versions_and_tooltip(exe_dir: &Path) {
     if let Some(mut app) = app_state_mut() {
         let (sing_ver, xray_ver) = detect_versions(exe_dir);

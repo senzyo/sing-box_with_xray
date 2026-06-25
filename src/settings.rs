@@ -1,6 +1,14 @@
+//! 配置文件加载。
+//!
+//! 从 `configs/settings.toml` 读取用户配置（GitHub 代理、日志级别、下载重试参数）。
+//! 文件缺失或解析失败时静默回退到默认值，不中断程序运行。
+
 use serde::Deserialize;
 use std::path::Path;
 
+/// 应用配置，对应 `configs/settings.toml`。
+///
+/// 所有字段均提供默认值，配置文件缺失或解析失败时自动回退。
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct Settings {
     #[serde(default = "default_gh_proxy")]
@@ -11,20 +19,25 @@ pub struct Settings {
     pub download: Download,
 }
 
+/// GitHub CDN 代理配置。
 #[derive(Debug, Clone, Deserialize)]
 pub struct GhProxy {
     #[serde(default = "default_true")]
     pub enabled: bool,
+    /// 代理 URL 前缀，会拼接在 GitHub 原始下载链接前面。
     #[serde(default = "default_proxy_url")]
     pub url: String,
 }
 
+/// 日志配置。
 #[derive(Debug, Clone, Deserialize)]
 pub struct Log {
+    /// 日志级别，可选值: "debug", "info", "warn", "error"。
     #[serde(default = "default_log_level")]
     pub level: String,
 }
 
+/// 下载重试配置。
 #[derive(Debug, Clone, Deserialize)]
 pub struct Download {
     #[serde(default = "default_max_retries")]
@@ -38,6 +51,7 @@ fn default_true() -> bool {
 }
 
 fn default_proxy_url() -> String {
+    // 默认 GitHub CDN 代理，用于网络受限地区加速下载
     "https://gh-proxy.com/".to_string()
 }
 
@@ -86,6 +100,8 @@ impl Default for Download {
 const ALLOWED_LEVELS: &[&str] = &["debug", "info", "warn", "error"];
 
 impl Settings {
+    /// 从 `exe_dir/configs/settings.toml` 加载配置。
+    /// 文件不存在或格式错误时打印警告并返回默认值。
     pub fn load(exe_dir: &Path) -> Self {
         let path = exe_dir.join("configs").join("settings.toml");
 
@@ -109,6 +125,7 @@ impl Settings {
         }
     }
 
+    /// 校验配置值合法性，非法值回退到默认值。
     fn validate(&mut self) {
         let level = self.log.level.to_lowercase();
         if ALLOWED_LEVELS.contains(&level.as_str()) {

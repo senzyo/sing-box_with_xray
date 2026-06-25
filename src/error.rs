@@ -1,5 +1,8 @@
+//! 统一错误类型定义。
+
 use thiserror::Error;
 
+/// 应用统一错误类型。
 #[derive(Error, Debug)]
 #[allow(dead_code)]
 pub enum AppError {

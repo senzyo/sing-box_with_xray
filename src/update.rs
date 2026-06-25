@@ -1,3 +1,9 @@
+//! 核心更新逻辑。
+//!
+//! 通过 GitHub Releases API 检查 sing-box / xray 的最新版本，
+//! 与本地版本比较后决定是否下载更新。支持 CDN 代理、SHA256 校验、
+//! 自动重试，下载完成后从 zip 中提取 exe 并替换。
+
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::fs;
@@ -5,8 +11,10 @@ use std::io::{self, BufReader, Read};
 use std::path::Path;
 use std::process::Command;
 
+/// GitHub API 要求的 User-Agent 头，缺少会返回 403。
 const USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36 Edg/149.0.0.0";
 
+/// 依次更新 sing-box 和 xray。
 pub fn update_cores(
     exe_dir: &Path,
     sing_ver: Option<&str>,
@@ -21,6 +29,7 @@ pub fn update_cores(
     update_xray(&exe_dir, xray_ver, gh_proxy_enabled, gh_proxy_url, max_retries, retry_delay_secs)
 }
 
+/// 检查并更新 sing-box。本地版本已知时可跳过版本检测。
 pub fn update_sing_box(exe_dir: &Path, local_version: Option<&str>, gh_proxy_enabled: bool, gh_proxy_url: &str, max_retries: u32, retry_delay_secs: u64) -> Result<(), String> {
     let exe_path = exe_dir.join("core").join("sing-box.exe");
     let api_url = "https://api.github.com/repos/SagerNet/sing-box/releases/latest";
@@ -74,6 +83,7 @@ pub fn update_sing_box(exe_dir: &Path, local_version: Option<&str>, gh_proxy_ena
     Ok(())
 }
 
+/// 检查并更新 xray。本地版本已知时可跳过版本检测。
 pub fn update_xray(exe_dir: &Path, local_version: Option<&str>, gh_proxy_enabled: bool, gh_proxy_url: &str, max_retries: u32, retry_delay_secs: u64) -> Result<(), String> {
     let exe_path = exe_dir.join("core").join("xray.exe");
     let api_url = "https://api.github.com/repos/XTLS/Xray-core/releases/latest";
@@ -126,6 +136,7 @@ pub fn update_xray(exe_dir: &Path, local_version: Option<&str>, gh_proxy_enabled
     Ok(())
 }
 
+/// 运行可执行文件的版本命令并从 stdout 提取版本号，失败返回 "0.0.0"。
 pub(crate) fn get_local_version(exe_path: &Path, version_arg: &str) -> String {
     let output = match Command::new(exe_path).arg(version_arg).output() {
         Ok(out) => out,
@@ -136,6 +147,10 @@ pub(crate) fn get_local_version(exe_path: &Path, version_arg: &str) -> String {
     extract_version(&text).unwrap_or_else(|| "0.0.0".to_string())
 }
 
+/// 从命令输出中提取版本号（如 "sing-box version 1.13.13" → "1.13.13"）。
+///
+/// 逐字节扫描，累积数字和点号，遇到连字符停止（跳过 "-beta" 等后缀），
+/// 遇到其他非数字字符终止。要求结果至少包含一个点号。
 fn extract_version(text: &str) -> Option<String> {
     let bytes = text.as_bytes();
     let mut start = None;
@@ -165,6 +180,8 @@ fn extract_version(text: &str) -> Option<String> {
     }
 }
 
+/// 比较两个版本号，remote > local 时返回 true。
+/// 缺失的段按 0 处理，因此 "1.0" 等价于 "1.0.0"。
 fn is_newer(local: &str, remote: &str) -> bool {
     let local: Vec<u32> = local.split('.').filter_map(|s| s.parse().ok()).collect();
     let remote: Vec<u32> = remote.split('.').filter_map(|s| s.parse().ok()).collect();
@@ -182,6 +199,7 @@ fn is_newer(local: &str, remote: &str) -> bool {
     false
 }
 
+/// 调用 GitHub Releases API 获取最新版本号和 assets 列表。
 fn fetch_release(api_url: &str) -> Result<(String, Vec<Value>), String> {
     let resp = ureq::get(api_url)
         .header("User-Agent", USER_AGENT)
@@ -211,6 +229,7 @@ fn fetch_release(api_url: &str) -> Result<(String, Vec<Value>), String> {
     Ok((version, assets))
 }
 
+/// 从 release assets 中查找指定文件名的下载 URL。
 fn find_asset_url(assets: &[Value], file_name: &str) -> Option<String> {
     assets
         .iter()
@@ -219,6 +238,8 @@ fn find_asset_url(assets: &[Value], file_name: &str) -> Option<String> {
         .map(|s| s.to_string())
 }
 
+/// 从 release asset 的 digest 字段提取十六进制哈希值。
+/// digest 格式为 "sha256:<hex>"，取冒号后面的部分。
 fn find_asset_digest(assets: &[Value], file_name: &str) -> Option<String> {
     assets
         .iter()
@@ -228,6 +249,8 @@ fn find_asset_digest(assets: &[Value], file_name: &str) -> Option<String> {
         .map(|s| s.to_string())
 }
 
+/// 带重试的下载。启用代理时将代理 URL 前缀拼接到下载链接。
+/// 若提供 expected_hash，下载后校验 SHA256，不匹配则删除文件并重试。
 fn download_with_retry(
     download_url: &str,
     dest: &Path,
@@ -265,6 +288,7 @@ fn download_with_retry(
     Err("下载文件校验失败，已达到最大重试次数".to_string())
 }
 
+/// 下载单个文件到指定路径，已存在时先删除。
 fn download_file(url: &str, dest: &Path) -> Result<(), String> {
     if dest.exists() {
         let _ = fs::remove_file(dest);
@@ -283,6 +307,7 @@ fn download_file(url: &str, dest: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// 计算文件的 SHA256 哈希值，返回小写十六进制字符串。
 fn sha256_file(path: &Path) -> Result<String, String> {
     let mut file =
         fs::File::open(path).map_err(|e| format!("打开文件计算 SHA256 失败: {e}"))?;
@@ -299,6 +324,11 @@ fn sha256_file(path: &Path) -> Result<String, String> {
     Ok(hash.iter().map(|b| format!("{b:02x}")).collect())
 }
 
+/// 从 zip 文件中提取指定 exe 并替换目标路径。
+///
+/// 两轮搜索策略：
+/// 1. 先在 zip 根目录查找文件名完全匹配的条目（不包含路径分隔符）
+/// 2. 若未找到，再按路径后缀模糊匹配（兼容 exe 在子目录中的情况）
 fn replace_exe_from_zip(
     zip_path: &Path,
     exe_name_in_zip: &str,
