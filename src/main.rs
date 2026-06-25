@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod error;
 mod toast;
 mod tray;
 mod update;
@@ -8,13 +9,17 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::fs;
+use std::io::{BufRead, BufReader};
 use std::os::windows::ffi::OsStrExt;
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::ptr::null;
 use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
+use tracing::{info, warn};
+use tracing_subscriber::filter::EnvFilter;
+use tracing_subscriber::prelude::*;
 use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED};
 use windows::Win32::Foundation::{CloseHandle, HWND};
 use windows::Win32::System::Diagnostics::ToolHelp::{
@@ -60,6 +65,25 @@ fn main() {
     }
 }
 
+fn init_logging(work_dir: &Path) -> Result<(), String> {
+    let log_dir = work_dir.join("logs");
+    fs::create_dir_all(&log_dir).map_err(|e| format!("创建日志目录失败: {e}"))?;
+    let file = std::fs::File::create(log_dir.join("app.log"))
+        .map_err(|e| format!("创建日志文件失败: {e}"))?;
+    let filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::new("info"));
+    let file_layer = tracing_subscriber::fmt::layer()
+        .with_writer(file)
+        .with_target(false)
+        .compact()
+        .with_filter(filter);
+    tracing_subscriber::registry()
+        .with(file_layer)
+        .try_init()
+        .map_err(|e| format!("初始化日志系统失败: {e}"))?;
+    Ok(())
+}
+
 fn run() -> Result<(), String> {
     unsafe {
         CoInitializeEx(None, COINIT_APARTMENTTHREADED)
@@ -70,6 +94,9 @@ fn run() -> Result<(), String> {
     let work_dir = detect_work_dir();
     let exe_path = std::env::current_exe()
         .unwrap_or_else(|_| work_dir.join("sing-box_with_xray.exe"));
+
+    init_logging(&work_dir)?;
+    info!("程序启动, 工作目录: {}", work_dir.display());
     toast::setup(&exe_path).map_err(|e| format!("初始化 Toast 通知失败: {e}"))?;
 
     fs::create_dir_all(work_dir.join("configs").join("sing-box")).map_err(|e| e.to_string())?;
@@ -168,6 +195,7 @@ fn execute_menu_command(hwnd: isize, id: u16) {
             return;
         }
         tray::ID_EXIT => {
+            info!("退出程序");
             let _ = stop_all();
             unsafe { let _ = DestroyWindow(HWND(hwnd as *mut std::ffi::c_void)); }
             Ok(())
@@ -181,27 +209,32 @@ fn execute_menu_command(hwnd: isize, id: u16) {
 }
 
 fn restart_all() -> Result<(), String> {
+    info!("重启所有服务");
     stop_all()?;
     start_sing_box()?;
     start_xray()
 }
 
 fn restart_sing_box() -> Result<(), String> {
+    info!("重启 sing-box");
     stop_processes(&["sing-box.exe"])?;
     start_sing_box()
 }
 
 fn restart_xray() -> Result<(), String> {
+    info!("重启 xray");
     stop_processes(&["xray.exe"])?;
     start_xray()
 }
 
 fn stop_all() -> Result<(), String> {
+    info!("终止所有服务");
     stop_processes(&["sing-box.exe", "xray.exe"])
 }
 
 fn stop_processes(processes: &[&str]) -> Result<(), String> {
     for process in processes {
+        info!("终止进程: {process}");
         kill_processes_by_name(process);
     }
     flush_dns();
@@ -249,14 +282,25 @@ fn start_sing_box() -> Result<(), String> {
     ensure_exists(&config)?;
     randomize_tun_name(&config)?;
 
-    hidden_command(exe)
+    info!("启动 sing-box");
+    let mut child = hidden_command(exe)
         .args(["run", "-D"])
         .arg(&work_dir)
         .arg("-c")
         .arg(config)
         .current_dir(work_dir)
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
         .spawn()
         .map_err(|e| format!("启动 sing-box 失败: {e}"))?;
+    if let Some(stderr) = child.stderr.take() {
+        std::thread::spawn(move || {
+            let reader = BufReader::new(stderr);
+            for line in reader.lines().map_while(Result::ok) {
+                warn!("[sing-box] {line}");
+            }
+        });
+    }
 
     Ok(())
 }
@@ -269,12 +313,23 @@ fn start_xray() -> Result<(), String> {
     ensure_exists(&exe)?;
     ensure_exists(&config)?;
 
-    hidden_command(exe)
+    info!("启动 xray");
+    let mut child = hidden_command(exe)
         .args(["run", "-c"])
         .arg(config)
         .current_dir(work_dir)
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
         .spawn()
         .map_err(|e| format!("启动 xray 失败: {e}"))?;
+    if let Some(stderr) = child.stderr.take() {
+        std::thread::spawn(move || {
+            let reader = BufReader::new(stderr);
+            for line in reader.lines().map_while(Result::ok) {
+                warn!("[xray] {line}");
+            }
+        });
+    }
 
     Ok(())
 }
