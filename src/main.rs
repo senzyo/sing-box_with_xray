@@ -400,7 +400,7 @@ fn start_sing_box_at(exe_dir: &Path) -> Result<(), String> {
     cleanup_orphaned_wintun();
 
     let exe = exe_dir.join("core").join("sing-box.exe");
-    let config = exe_dir.join("sing-box.json");
+    let config = exe_dir.join("configs").join("sing-box.json");
 
     ensure_exists(&exe)?;
     ensure_exists(&config)?;
@@ -431,7 +431,7 @@ fn start_sing_box_at(exe_dir: &Path) -> Result<(), String> {
 
 fn start_xray_at(exe_dir: &Path) -> Result<(), String> {
     let exe = exe_dir.join("core").join("xray.exe");
-    let config = exe_dir.join("xray.json");
+    let config = exe_dir.join("configs").join("xray.json");
 
     ensure_exists(&exe)?;
     ensure_exists(&config)?;
@@ -471,12 +471,12 @@ fn run_config_action(id: u16) -> Result<(), String> {
     info!("切换配置: {}", action.path.display());
     match action.kind {
         ConfigKind::SingBox => {
-            fs::copy(&action.path, exe_dir.join("sing-box.json"))
+            fs::copy(&action.path, exe_dir.join("configs").join("sing-box.json"))
                 .map_err(|e| format!("切换 sing-box 配置失败: {e}"))?;
             restart_sing_box_at(&exe_dir)
         }
         ConfigKind::Xray => {
-            fs::copy(&action.path, exe_dir.join("xray.json"))
+            fs::copy(&action.path, exe_dir.join("configs").join("xray.json"))
                 .map_err(|e| format!("切换 xray 配置失败: {e}"))?;
             restart_xray_at(&exe_dir)
         }
