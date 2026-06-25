@@ -1,7 +1,7 @@
 {
   "log": {
     "access": "none",
-    "error": "C:\\Users\\admin\\Apps\\sing-box-with-xray\\error.log",
+    "error": "none",
     "loglevel": "none",
     "dnsLog": true,
     "maskAddress": ""

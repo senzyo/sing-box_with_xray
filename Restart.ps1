@@ -75,7 +75,7 @@ foreach ($P in $Process) {
 Clear-DnsClientCache
 Start-Sleep -Seconds 1
 
-$WorkDir = "$env:USERPROFILE\Apps\sing-box-with-xray"
+$WorkDir = "$env:USERPROFILE\Apps\sing-box_with_xray"
 $ConfigPath = "$WorkDir\sing-box.json"
 $TempPath = "$WorkDir\sing-box.json.temp"
 $RandomHex = -join (1..3 | ForEach-Object { "{0:x2}" -f (Get-Random -Min 0 -Max 256) })
