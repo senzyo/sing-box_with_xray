@@ -115,10 +115,11 @@ fn run() -> Result<(), String> {
 
     if let Some(app) = app_state() {
         unsafe {
-            use windows_sys::Win32::Graphics::Gdi::DeleteObject;
-            if app.icon_green != 0 { DeleteObject(app.icon_green as _); }
-            if app.icon_yellow != 0 { DeleteObject(app.icon_yellow as _); }
-            if app.icon_red != 0 { DeleteObject(app.icon_red as _); }
+            use windows::Win32::Graphics::Gdi::DeleteObject;
+            use windows::Win32::Graphics::Gdi::HGDIOBJ;
+            if app.icon_green != 0 { let _ = DeleteObject(HGDIOBJ(app.icon_green as *mut std::ffi::c_void)); }
+            if app.icon_yellow != 0 { let _ = DeleteObject(HGDIOBJ(app.icon_yellow as *mut std::ffi::c_void)); }
+            if app.icon_red != 0 { let _ = DeleteObject(HGDIOBJ(app.icon_red as *mut std::ffi::c_void)); }
         }
     }
 
@@ -564,17 +565,6 @@ fn app_state_mut() -> Option<std::sync::MutexGuard<'static, AppState>> {
 
 fn wide(value: &str) -> Vec<u16> {
     OsStr::new(value).encode_wide().chain(Some(0)).collect()
-}
-
-fn wide_path(path: &Path) -> Vec<u16> {
-    path.as_os_str().encode_wide().chain(Some(0)).collect()
-}
-
-fn set_wstr_array<const N: usize>(target: &mut [u16; N], value: &str) {
-    let wide = wide(value);
-    let len = wide.len().saturating_sub(1).min(N - 1);
-    target[..len].copy_from_slice(&wide[..len]);
-    target[len] = 0;
 }
 
 fn detect_versions(work_dir: &Path) -> (Option<String>, Option<String>) {

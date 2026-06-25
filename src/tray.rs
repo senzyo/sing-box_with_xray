@@ -1,17 +1,19 @@
-use std::ffi::c_void;
-use std::mem::{size_of, zeroed};
+use std::mem::size_of;
 use std::path::{Path, PathBuf};
-use std::ptr::{null, null_mut};
 use std::sync::OnceLock;
-use windows_sys::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, POINT, WPARAM};
-use windows_sys::Win32::Graphics::Gdi::{
+use windows::core::{HSTRING, PCWSTR};
+use windows::Win32::Foundation::{
+    HINSTANCE, HWND, LPARAM, LRESULT, POINT, WPARAM,
+};
+use windows::Win32::Graphics::Gdi::{
     CreateCompatibleDC, CreateDIBSection, DeleteDC, GetDC, ReleaseDC,
-    SelectObject, BI_RGB, BITMAPINFO, BITMAPINFOHEADER, DIB_RGB_COLORS,
+    SelectObject, BI_RGB, BITMAPINFO, BITMAPINFOHEADER, DIB_RGB_COLORS, HBITMAP, HGDIOBJ,
 };
-use windows_sys::Win32::UI::Shell::{
-    Shell_NotifyIconW, NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NIM_MODIFY, NOTIFYICONDATAW,
+use windows::Win32::UI::Shell::{
+    Shell_NotifyIconW, NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NIM_MODIFY,
+    NOTIFYICONDATAW,
 };
-use windows_sys::Win32::UI::WindowsAndMessaging::{
+use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreatePopupMenu, CreateWindowExW, CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT,
     DefWindowProcW, DestroyIcon, DestroyMenu, DispatchMessageW, DrawIconEx, GetCursorPos,
     GetMenuItemCount, GetMessageW,
@@ -44,94 +46,161 @@ pub const ID_SING_CONFIG_BASE: u16 = 1000;
 pub const ID_XRAY_CONFIG_BASE: u16 = 2000;
 
 pub unsafe fn create_window(h_instance: isize) -> Result<isize, String> {
-    let h_instance = h_instance as HINSTANCE;
-    let class_name = crate::wide("SingBoxWithXrayTrayWindow");
+    let h_instance = HINSTANCE(h_instance as _);
+    let class_name = to_wide("SingBoxWithXrayTrayWindow");
 
     let wnd_class = WNDCLASSW {
         style: CS_HREDRAW | CS_VREDRAW,
         lpfnWndProc: Some(wnd_proc),
         hInstance: h_instance,
-        lpszClassName: class_name.as_ptr(),
-        ..zeroed()
+        lpszClassName: PCWSTR(class_name.as_ptr()),
+        ..Default::default()
     };
 
     if RegisterClassW(&wnd_class) == 0 {
         return Err("注册托盘窗口类失败".to_string());
     }
 
+    let title = to_wide("sing-box-with-xray");
     let hwnd = CreateWindowExW(
-        0,
-        class_name.as_ptr(),
-        crate::wide("sing-box-with-xray").as_ptr(),
+        Default::default(),
+        PCWSTR(class_name.as_ptr()),
+        PCWSTR(title.as_ptr()),
         WS_OVERLAPPED,
-        CW_USEDEFAULT,
-        CW_USEDEFAULT,
-        CW_USEDEFAULT,
-        CW_USEDEFAULT,
-        null_mut(),
-        null_mut(),
-        h_instance,
-        null(),
+        CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT,
+        None, None, Some(h_instance), None,
     );
 
-    if hwnd.is_null() {
+    let Ok(hwnd) = hwnd else {
         return Err("创建托盘窗口失败".to_string());
-    }
+    };
 
-    Ok(hwnd as isize)
+    Ok(hwnd.0 as isize)
 }
 
 pub unsafe fn add_icon(hwnd: isize, h_instance: isize, work_dir: &Path) -> Result<(), String> {
-    let hwnd = hwnd as HWND;
-    let h_instance = h_instance as HINSTANCE;
-    let icon = load_app_icon(h_instance, work_dir);
-    let mut nid: NOTIFYICONDATAW = zeroed();
-    nid.cbSize = size_of::<NOTIFYICONDATAW>() as u32;
-    nid.hWnd = hwnd;
-    nid.uID = TRAY_UID;
-    nid.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
-    nid.uCallbackMessage = WM_TRAY_ICON;
-    nid.hIcon = icon;
-    crate::set_wstr_array(&mut nid.szTip, "sing-box-with-xray");
+    let hwnd = HWND(hwnd as _);
+    let h_instance = HINSTANCE(h_instance as _);
+    let icon = load_app_icon(Some(h_instance), work_dir);
+    let nid = NOTIFYICONDATAW {
+        cbSize: size_of::<NOTIFYICONDATAW>() as u32,
+        hWnd: hwnd,
+        uID: TRAY_UID,
+        uFlags: NIF_MESSAGE | NIF_ICON | NIF_TIP,
+        uCallbackMessage: WM_TRAY_ICON,
+        hIcon: icon,
+        szTip: to_wide_padded("sing-box-with-xray"),
+        ..Default::default()
+    };
 
-    if Shell_NotifyIconW(NIM_ADD, &nid) == 0 {
+    if !Shell_NotifyIconW(NIM_ADD, &nid).as_bool() {
         return Err("添加系统托盘图标失败".to_string());
     }
 
-    let _ = TRAY_HWND.set(hwnd as isize);
+    let _ = TRAY_HWND.set(hwnd.0 as isize);
     Ok(())
 }
 
 pub unsafe fn run_message_loop() {
-    let mut msg: MSG = zeroed();
-    while GetMessageW(&mut msg, null_mut(), 0, 0) > 0 {
-        TranslateMessage(&msg);
+    let mut msg: MSG = Default::default();
+    while GetMessageW(&mut msg, None, 0, 0).as_bool() {
+        let _ = TranslateMessage(&msg);
         DispatchMessageW(&msg);
     }
 }
 
 pub fn show_error(hwnd: isize, title: &str, message: &str) {
-    let hwnd = hwnd as HWND;
+    let hwnd = if hwnd == 0 { None } else { Some(HWND(hwnd as _)) };
     unsafe {
-        let title = crate::wide(title);
-        let message = crate::wide(message);
-        MessageBoxW(hwnd, message.as_ptr(), title.as_ptr(), MB_OK | MB_ICONERROR);
+        let _ = MessageBoxW(hwnd, &HSTRING::from(message), &HSTRING::from(title), MB_OK | MB_ICONERROR);
     }
 }
 
 pub fn set_tooltip(text: &str) {
     if let Some(&hwnd_val) = TRAY_HWND.get() {
-        let hwnd = hwnd_val as HWND;
+        let hwnd = HWND(hwnd_val as _);
         unsafe {
-            let mut nid: NOTIFYICONDATAW = zeroed();
-            nid.cbSize = size_of::<NOTIFYICONDATAW>() as u32;
-            nid.hWnd = hwnd;
-            nid.uID = TRAY_UID;
-            nid.uFlags = NIF_TIP;
-            crate::set_wstr_array(&mut nid.szTip, text);
-            Shell_NotifyIconW(NIM_MODIFY, &nid);
+            let nid = NOTIFYICONDATAW {
+                cbSize: size_of::<NOTIFYICONDATAW>() as u32,
+                hWnd: hwnd,
+                uID: TRAY_UID,
+                uFlags: NIF_TIP,
+                szTip: to_wide_padded(text),
+                ..Default::default()
+            };
+            let _ = Shell_NotifyIconW(NIM_MODIFY, &nid);
         }
     }
+}
+
+pub(crate) unsafe fn load_icon_bitmap(work_dir: &Path, icon_name: &str) -> isize {
+    let icon_path = work_dir.join("icon").join(icon_name);
+    if !icon_path.exists() {
+        return 0;
+    }
+    let icon_path_w: Vec<u16> = icon_path.to_string_lossy().encode_utf16().chain(Some(0)).collect();
+    let hicon = LoadImageW(
+        None,
+        PCWSTR(icon_path_w.as_ptr()),
+        IMAGE_ICON,
+        16, 16,
+        LR_LOADFROMFILE | LR_DEFAULTSIZE,
+    );
+    let Ok(hicon) = hicon else { return 0; };
+    let hicon = HICON(hicon.0);
+
+    let screen_dc = GetDC(None);
+    if screen_dc.is_invalid() {
+        let _ = DestroyIcon(hicon);
+        return 0;
+    }
+    let mem_dc = CreateCompatibleDC(Some(screen_dc));
+    if mem_dc.is_invalid() {
+        let _ = ReleaseDC(None, screen_dc);
+        let _ = DestroyIcon(hicon);
+        return 0;
+    }
+
+    let bmi = BITMAPINFO {
+        bmiHeader: BITMAPINFOHEADER {
+            biSize: size_of::<BITMAPINFOHEADER>() as u32,
+            biWidth: 16,
+            biHeight: 16,
+            biPlanes: 1,
+            biBitCount: 32,
+            biCompression: BI_RGB.0,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+
+    let mut pv_bits: *mut std::ffi::c_void = std::ptr::null_mut();
+    let Ok(bmp) = CreateDIBSection(
+        Some(screen_dc),
+        &bmi,
+        DIB_RGB_COLORS,
+        &mut pv_bits,
+        None,
+        0,
+    ) else {
+        let _ = DeleteDC(mem_dc);
+        let _ = DestroyIcon(hicon);
+        return 0;
+    };
+
+    let old_bmp = SelectObject(mem_dc, HGDIOBJ(bmp.0));
+    let _ = DrawIconEx(
+        mem_dc, 0, 0,
+        hicon,
+        16, 16, 0,
+        None,
+        DI_NORMAL,
+    );
+    SelectObject(mem_dc, old_bmp);
+    let _ = DeleteDC(mem_dc);
+    let _ = DestroyIcon(hicon);
+
+    bmp.0 as isize
 }
 
 unsafe extern "system" fn wnd_proc(
@@ -142,115 +211,50 @@ unsafe extern "system" fn wnd_proc(
 ) -> LRESULT {
     match msg {
         WM_TRAY_ICON => {
-            let event = lparam as u32;
+            let event = lparam.0 as u32;
             if event == WM_LBUTTONUP || event == WM_RBUTTONUP {
                 let selected = show_tray_menu(hwnd);
                 if selected != 0 {
-                    crate::execute_menu_command(hwnd as isize, selected);
+                    crate::execute_menu_command(hwnd.0 as isize, selected);
                 }
             }
-            0
+            LRESULT(0)
         }
         WM_DESTROY => {
             remove_tray_icon(hwnd);
             PostQuitMessage(0);
-            0
+            LRESULT(0)
         }
         _ => DefWindowProcW(hwnd, msg, wparam, lparam),
     }
 }
 
-unsafe fn load_app_icon(h_instance: HINSTANCE, work_dir: &Path) -> HICON {
+unsafe fn load_app_icon(h_instance: Option<HINSTANCE>, work_dir: &Path) -> HICON {
     let icon_path = work_dir.join("icon").join("ladder.ico");
     if icon_path.exists() {
-        let icon_path = crate::wide_path(&icon_path);
+        let icon_path_w: Vec<u16> = icon_path.to_string_lossy().encode_utf16().chain(Some(0)).collect();
         let icon = LoadImageW(
             h_instance,
-            icon_path.as_ptr(),
+            PCWSTR(icon_path_w.as_ptr()),
             IMAGE_ICON,
-            0,
-            0,
+            0, 0,
             LR_LOADFROMFILE | LR_DEFAULTSIZE,
         );
-        if !icon.is_null() {
-            return icon as HICON;
+        if let Ok(icon) = icon {
+            return HICON(icon.0);
         }
     }
-
-    LoadIconW(null_mut(), IDI_APPLICATION)
-}
-
-pub(crate) unsafe fn load_icon_bitmap(work_dir: &Path, icon_name: &str) -> isize {
-    let icon_path = work_dir.join("icon").join(icon_name);
-    if !icon_path.exists() {
-        return 0;
-    }
-    let icon_path = crate::wide_path(&icon_path);
-    let hicon = LoadImageW(
-        null_mut(),
-        icon_path.as_ptr(),
-        IMAGE_ICON,
-        16,
-        16,
-        LR_LOADFROMFILE,
-    );
-    if hicon.is_null() {
-        return 0;
-    }
-
-    let screen_dc = GetDC(null_mut());
-    if screen_dc.is_null() {
-        DestroyIcon(hicon as HICON);
-        return 0;
-    }
-    let mem_dc = CreateCompatibleDC(screen_dc);
-    if mem_dc.is_null() {
-        ReleaseDC(null_mut(), screen_dc);
-        DestroyIcon(hicon as HICON);
-        return 0;
-    }
-
-    let mut bmi: BITMAPINFO = zeroed();
-    bmi.bmiHeader.biSize = size_of::<BITMAPINFOHEADER>() as u32;
-    bmi.bmiHeader.biWidth = 16;
-    bmi.bmiHeader.biHeight = 16;
-    bmi.bmiHeader.biPlanes = 1;
-    bmi.bmiHeader.biBitCount = 32;
-    bmi.bmiHeader.biCompression = BI_RGB;
-
-    let mut pv_bits: *mut c_void = null_mut();
-    let bmp = CreateDIBSection(
-        mem_dc,
-        &bmi,
-        DIB_RGB_COLORS,
-        &mut pv_bits,
-        0 as _,
-        0,
-    );
-
-    ReleaseDC(null_mut(), screen_dc);
-
-    if bmp.is_null() {
-        DeleteDC(mem_dc);
-        DestroyIcon(hicon as HICON);
-        return 0;
-    }
-
-    let old_bmp = SelectObject(mem_dc, bmp);
-    DrawIconEx(mem_dc, 0, 0, hicon as HICON, 16, 16, 0, null_mut(), DI_NORMAL);
-    SelectObject(mem_dc, old_bmp);
-    DeleteDC(mem_dc);
-    DestroyIcon(hicon as HICON);
-
-    bmp as isize
+    LoadIconW(None, IDI_APPLICATION).unwrap_or_default()
 }
 
 unsafe fn remove_tray_icon(hwnd: HWND) {
-    let mut nid: NOTIFYICONDATAW = zeroed();
-    nid.cbSize = size_of::<NOTIFYICONDATAW>() as u32;
-    nid.hWnd = hwnd;
-    nid.uID = TRAY_UID;
-    Shell_NotifyIconW(NIM_DELETE, &nid);
+    let nid = NOTIFYICONDATAW {
+        cbSize: size_of::<NOTIFYICONDATAW>() as u32,
+        hWnd: hwnd,
+        uID: TRAY_UID,
+        ..Default::default()
+    };
+    let _ = Shell_NotifyIconW(NIM_DELETE, &nid);
 }
 
 unsafe fn show_tray_menu(hwnd: HWND) -> u16 {
@@ -259,7 +263,7 @@ unsafe fn show_tray_menu(hwnd: HWND) -> u16 {
         None => return 0,
     };
 
-    let menu = CreatePopupMenu();
+    let Ok(menu) = CreatePopupMenu() else { return 0; };
 
     let sing_state = crate::sing_box_state(&app);
     let xray_state = crate::xray_state(&app);
@@ -278,13 +282,13 @@ unsafe fn show_tray_menu(hwnd: HWND) -> u16 {
 
     append_status_item(menu, &status_label(sing_state, "sing-box"), status_hbmp(sing_state));
     append_status_item(menu, &status_label(xray_state, "xray"), status_hbmp(xray_state));
-    AppendMenuW(menu, MF_SEPARATOR, 0, null());
+    append_separator(menu);
 
-    let restart_menu = CreatePopupMenu();
-    let stop_menu = CreatePopupMenu();
-    let update_menu = CreatePopupMenu();
-    let sing_menu = CreatePopupMenu();
-    let xray_menu = CreatePopupMenu();
+    let restart_menu = new_submenu();
+    let stop_menu = new_submenu();
+    let update_menu = new_submenu();
+    let sing_menu = new_submenu();
+    let xray_menu = new_submenu();
 
     append_item(restart_menu, ID_RESTART_ALL, "重启 sing-box 和 xray");
     append_item(restart_menu, ID_RESTART_SING, "重启 sing-box");
@@ -319,60 +323,65 @@ unsafe fn show_tray_menu(hwnd: HWND) -> u16 {
     append_submenu(menu, update_menu, "更新核心");
     append_submenu(menu, sing_menu, "切换 sing-box 配置");
     append_submenu(menu, xray_menu, "切换 xray 配置");
-    AppendMenuW(menu, MF_SEPARATOR, 0, null());
+    append_separator(menu);
     append_item(menu, ID_EXIT, "退出并终止");
 
-    let mut point = POINT { x: 0, y: 0 };
-    GetCursorPos(&mut point);
-    SetForegroundWindow(hwnd);
+    let mut point = POINT::default();
+    let _ = GetCursorPos(&mut point);
+    let _ = SetForegroundWindow(hwnd);
     let selected = TrackPopupMenu(
         menu,
         TPM_RETURNCMD | TPM_NONOTIFY | TPM_RIGHTBUTTON,
-        point.x,
-        point.y,
-        0,
+        point.x, point.y,
+        Some(0),
         hwnd,
-        null(),
+        None,
     );
 
-    DestroyMenu(menu);
+    let _ = DestroyMenu(menu);
 
-    selected as u16
+    selected.0 as u16
+}
+
+fn new_submenu() -> HMENU {
+    unsafe { CreatePopupMenu().unwrap_or_default() }
+}
+
+unsafe fn append_separator(menu: HMENU) {
+    let _ = AppendMenuW(menu, MF_SEPARATOR, 0, None);
 }
 
 unsafe fn append_item(menu: HMENU, id: u16, label: &str) {
-    let label = crate::wide(label);
-    AppendMenuW(menu, MF_STRING, id as usize, label.as_ptr());
+    let w = to_wide(label);
+    let _ = AppendMenuW(menu, MF_STRING, id as usize, PCWSTR(w.as_ptr()));
 }
 
 unsafe fn append_disabled_item(menu: HMENU, label: &str) {
-    let label = crate::wide(label);
-    AppendMenuW(menu, MF_STRING | MF_GRAYED, 0, label.as_ptr());
+    let w = to_wide(label);
+    let _ = AppendMenuW(menu, MF_STRING | MF_GRAYED, 0, PCWSTR(w.as_ptr()));
 }
 
-unsafe fn append_status_item(
-    menu: HMENU,
-    label: &str,
-    hbmp: isize,
-) {
-    let label = crate::wide(label);
-    let position = GetMenuItemCount(menu) as u32;
-    AppendMenuW(menu, MF_STRING, 0, label.as_ptr());
+unsafe fn append_status_item(menu: HMENU, label: &str, hbmp: isize) {
+    let w = to_wide(label);
+    let position = GetMenuItemCount(Some(menu)) as u32;
+    let _ = AppendMenuW(menu, MF_STRING, 0, PCWSTR(w.as_ptr()));
 
     if hbmp == 0 {
         return;
     }
 
-    let mut mii: MENUITEMINFOW = zeroed();
-    mii.cbSize = size_of::<MENUITEMINFOW>() as u32;
-    mii.fMask = MIIM_BITMAP;
-    mii.hbmpItem = hbmp as _;
-    SetMenuItemInfoW(menu, position, 1, &mii);
+    let mii = MENUITEMINFOW {
+        cbSize: size_of::<MENUITEMINFOW>() as u32,
+        fMask: MIIM_BITMAP,
+        hbmpItem: HBITMAP(hbmp as _),
+        ..Default::default()
+    };
+    let _ = SetMenuItemInfoW(menu, position, true, &mii);
 }
 
 unsafe fn append_submenu(menu: HMENU, submenu: HMENU, label: &str) {
-    let label = crate::wide(label);
-    AppendMenuW(menu, MF_STRING | MF_POPUP, submenu as usize, label.as_ptr());
+    let w = to_wide(label);
+    let _ = AppendMenuW(menu, MF_STRING | MF_POPUP, submenu.0 as usize, PCWSTR(w.as_ptr()));
 }
 
 unsafe fn append_config_items(
@@ -408,4 +417,16 @@ unsafe fn append_config_items(
     if added == 0 {
         append_disabled_item(menu, "未找到 .json 配置");
     }
+}
+
+fn to_wide(s: &str) -> Vec<u16> {
+    s.encode_utf16().chain(Some(0)).collect()
+}
+
+fn to_wide_padded<const N: usize>(s: &str) -> [u16; N] {
+    let mut buf = [0u16; N];
+    let wide = to_wide(s);
+    let len = wide.len().saturating_sub(1).min(N - 1);
+    buf[..len].copy_from_slice(&wide[..len]);
+    buf
 }
