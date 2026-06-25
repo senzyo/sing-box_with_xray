@@ -155,12 +155,37 @@ fn run() -> Result<(), String> {
 
 fn execute_menu_command(hwnd: isize, id: u16) {
     let result = match id {
-        tray::ID_RESTART_SING => restart_sing_box(),
-        tray::ID_RESTART_XRAY => restart_xray(),
-        tray::ID_RESTART_ALL => restart_all(),
-        tray::ID_STOP_SING => stop_processes(&["sing-box.exe"]),
-        tray::ID_STOP_XRAY => stop_processes(&["xray.exe"]),
-        tray::ID_STOP_ALL => stop_all(),
+        tray::ID_RESTART_SING | tray::ID_RESTART_XRAY | tray::ID_RESTART_ALL |
+        tray::ID_STOP_SING | tray::ID_STOP_XRAY | tray::ID_STOP_ALL => {
+            let work_dir = match work_dir() {
+                Ok(d) => d,
+                Err(e) => {
+                    tray::show_error(hwnd, "操作失败", &e);
+                    return;
+                }
+            };
+            std::thread::spawn(move || {
+                unsafe {
+                    let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+                }
+                let result = match id {
+                    tray::ID_RESTART_SING => restart_sing_box_at(&work_dir),
+                    tray::ID_RESTART_XRAY => restart_xray_at(&work_dir),
+                    tray::ID_RESTART_ALL => restart_all_at(&work_dir),
+                    tray::ID_STOP_SING => stop_processes(&["sing-box.exe"]),
+                    tray::ID_STOP_XRAY => stop_processes(&["xray.exe"]),
+                    tray::ID_STOP_ALL => stop_all(),
+                    _ => unreachable!(),
+                };
+                if let Err(err) = result {
+                    toast::show_toast("操作失败", &err);
+                }
+                unsafe {
+                    CoUninitialize();
+                }
+            });
+            return;
+        }
         tray::ID_UPDATE_ALL | tray::ID_UPDATE_SING | tray::ID_UPDATE_XRAY => {
             let work_dir = match work_dir() {
                 Ok(d) => d,
@@ -208,23 +233,23 @@ fn execute_menu_command(hwnd: isize, id: u16) {
     }
 }
 
-fn restart_all() -> Result<(), String> {
+fn restart_all_at(work_dir: &Path) -> Result<(), String> {
     info!("重启所有服务");
     stop_all()?;
-    start_sing_box()?;
-    start_xray()
+    start_sing_box_at(work_dir)?;
+    start_xray_at(work_dir)
 }
 
-fn restart_sing_box() -> Result<(), String> {
+fn restart_sing_box_at(work_dir: &Path) -> Result<(), String> {
     info!("重启 sing-box");
     stop_processes(&["sing-box.exe"])?;
-    start_sing_box()
+    start_sing_box_at(work_dir)
 }
 
-fn restart_xray() -> Result<(), String> {
+fn restart_xray_at(work_dir: &Path) -> Result<(), String> {
     info!("重启 xray");
     stop_processes(&["xray.exe"])?;
-    start_xray()
+    start_xray_at(work_dir)
 }
 
 fn stop_all() -> Result<(), String> {
@@ -271,10 +296,9 @@ fn kill_processes_by_name(exe_name: &str) {
     }
 }
 
-fn start_sing_box() -> Result<(), String> {
+fn start_sing_box_at(work_dir: &Path) -> Result<(), String> {
     cleanup_orphaned_wintun();
 
-    let work_dir = work_dir()?;
     let exe = work_dir.join("sing-box.exe");
     let config = work_dir.join("sing-box.json");
 
@@ -285,7 +309,7 @@ fn start_sing_box() -> Result<(), String> {
     info!("启动 sing-box");
     let mut child = hidden_command(exe)
         .args(["run", "-D"])
-        .arg(&work_dir)
+        .arg(work_dir)
         .arg("-c")
         .arg(config)
         .current_dir(work_dir)
@@ -305,8 +329,7 @@ fn start_sing_box() -> Result<(), String> {
     Ok(())
 }
 
-fn start_xray() -> Result<(), String> {
-    let work_dir = work_dir()?;
+fn start_xray_at(work_dir: &Path) -> Result<(), String> {
     let exe = work_dir.join("xray.exe");
     let config = work_dir.join("xray.json");
 
@@ -349,12 +372,12 @@ fn run_config_action(id: u16) -> Result<(), String> {
         ConfigKind::SingBox => {
             fs::copy(&action.path, work_dir.join("sing-box.json"))
                 .map_err(|e| format!("切换 sing-box 配置失败: {e}"))?;
-            restart_sing_box()
+            restart_sing_box_at(&work_dir)
         }
         ConfigKind::Xray => {
             fs::copy(&action.path, work_dir.join("xray.json"))
                 .map_err(|e| format!("切换 xray 配置失败: {e}"))?;
-            restart_xray()
+            restart_xray_at(&work_dir)
         }
     }
 }
