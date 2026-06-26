@@ -25,7 +25,7 @@ use std::ptr::null;
 use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 use time::OffsetDateTime;
-use tracing::{info, warn, Event};
+use tracing::{debug, error, info, warn, Event};
 use tracing_subscriber::filter::EnvFilter;
 use tracing_subscriber::fmt::format::Writer;
 use tracing_subscriber::fmt::{FmtContext, FormatEvent, FormatFields};
@@ -199,7 +199,18 @@ fn run() -> Result<(), String> {
     let app_settings = settings::Settings::load(&exe_dir);
 
     init_logging(&exe_dir, &app_settings.log.level)?;
+    for w in settings::Settings::take_warnings() {
+        warn!("{w}");
+    }
     info!("程序启动, exe目录: {}", exe_dir.display());
+    debug!(
+        "生效配置: proxy={}({}), log_level={}, max_retries={}, retry_delay={}s",
+        if app_settings.gh_proxy.enabled { "enabled" } else { "disabled" },
+        app_settings.gh_proxy.url,
+        app_settings.log.level,
+        app_settings.download.max_retries,
+        app_settings.download.retry_delay_secs,
+    );
     toast::setup(&exe_path).map_err(|e| format!("初始化 Toast 通知失败: {e}"))?;
 
     APP.set(Mutex::new(AppState {
@@ -266,6 +277,7 @@ fn execute_menu_command(hwnd: isize, id: u16) {
             let exe_dir = match exe_dir() {
                 Ok(d) => d,
                 Err(e) => {
+                    error!("获取 exe 目录失败: {e}");
                     tray::show_error(hwnd, "操作失败", &e);
                     return;
                 }
@@ -295,6 +307,7 @@ fn execute_menu_command(hwnd: isize, id: u16) {
                     _ => unreachable!(),
                 };
                 if let Err(err) = result {
+                    error!("操作失败: {err}");
                     toast::show_toast("操作失败", &err);
                 }
                 unsafe {
@@ -307,6 +320,7 @@ fn execute_menu_command(hwnd: isize, id: u16) {
             let exe_dir = match exe_dir() {
                 Ok(d) => d,
                 Err(e) => {
+                    error!("获取 exe 目录失败: {e}");
                     tray::show_error(hwnd, "操作失败", &e);
                     return;
                 }
@@ -320,7 +334,9 @@ fn execute_menu_command(hwnd: isize, id: u16) {
                 let s = &app.settings;
                 (s.gh_proxy.enabled, s.gh_proxy.url.clone(), s.download.max_retries, s.download.retry_delay_secs)
             };
-            let _ = stop_all();
+            if let Err(e) = stop_all() {
+                warn!("更新前终止进程失败: {e}");
+            }
             std::thread::spawn(move || {
                 unsafe {
                     let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
@@ -340,6 +356,7 @@ fn execute_menu_command(hwnd: isize, id: u16) {
                 };
                 refresh_versions_and_tooltip(&exe_dir);
                 if let Err(e) = result {
+                    error!("更新失败: {e}");
                     toast::show_toast("更新失败", &e);
                 }
                 unsafe {
@@ -350,7 +367,9 @@ fn execute_menu_command(hwnd: isize, id: u16) {
         }
         tray::ID_EXIT => {
             info!("退出程序");
-            let _ = stop_all();
+            if let Err(e) = stop_all() {
+                warn!("退出时终止进程失败: {e}");
+            }
             unsafe { let _ = DestroyWindow(HWND(hwnd as *mut std::ffi::c_void)); }
             Ok(())
         }
@@ -358,6 +377,7 @@ fn execute_menu_command(hwnd: isize, id: u16) {
     };
 
     if let Err(err) = result {
+        error!("菜单命令执行失败: {err}");
         tray::show_error(hwnd, "操作失败", &err);
     }
 }
@@ -396,6 +416,7 @@ fn stop_processes(processes: &[&str]) -> Result<(), String> {
 fn kill_processes_by_name(exe_name: &str) {
     unsafe {
         let Ok(snapshot) = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) else {
+            warn!("CreateToolhelp32Snapshot 失败，无法枚举进程");
             return;
         };
 
@@ -409,6 +430,7 @@ fn kill_processes_by_name(exe_name: &str) {
                 let name = String::from_utf16_lossy(name_bytes);
                 if name.eq_ignore_ascii_case(exe_name) {
                     if let Ok(handle) = OpenProcess(PROCESS_TERMINATE, false, entry.th32ProcessID) {
+                        debug!("终止进程: {} (PID {})", exe_name, entry.th32ProcessID);
                         let _ = TerminateProcess(handle, 1);
                         let _ = CloseHandle(handle);
                     }
@@ -501,12 +523,16 @@ fn run_config_action(id: u16) -> Result<(), String> {
     info!("切换配置: {}", action.path.display());
     match action.kind {
         ConfigKind::SingBox => {
-            fs::copy(&action.path, exe_dir.join("configs").join("sing-box.json"))
+            let dest = exe_dir.join("configs").join("sing-box.json");
+            debug!("复制配置: {} -> {}", action.path.display(), dest.display());
+            fs::copy(&action.path, dest)
                 .map_err(|e| format!("切换 sing-box 配置失败: {e}"))?;
             restart_sing_box_at(&exe_dir)
         }
         ConfigKind::Xray => {
-            fs::copy(&action.path, exe_dir.join("configs").join("xray.json"))
+            let dest = exe_dir.join("configs").join("xray.json");
+            debug!("复制配置: {} -> {}", action.path.display(), dest.display());
+            fs::copy(&action.path, dest)
                 .map_err(|e| format!("切换 xray 配置失败: {e}"))?;
             restart_xray_at(&exe_dir)
         }
@@ -544,6 +570,8 @@ fn randomize_tun_name(config_path: &Path) -> Result<(), String> {
         return Ok(());
     }
 
+    debug!("随机化 TUN 接口名: {old_name} -> {new_name}");
+
     let old_pattern = format!("\"interface_name\": \"{}\"", old_name);
     let new_pattern = format!("\"interface_name\": \"{}\"", new_name);
     let new_text = text.replacen(&old_pattern, &new_pattern, 1);
@@ -580,7 +608,12 @@ extern "system" {
 
 /// 刷新 DNS 缓存。代理进程终止后，残留的 DNS 缓存可能导致解析失败。
 fn flush_dns() {
-    unsafe { DnsFlushResolverCache(); }
+    let result = unsafe { DnsFlushResolverCache() };
+    if result == 0 {
+        debug!("DNS 缓存刷新成功");
+    } else {
+        warn!("DNS 缓存刷新失败: 返回码 {result}");
+    }
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -616,6 +649,7 @@ fn xray_state(app: &AppState) -> ProcessState {
 fn is_process_running(exe_name: &str) -> bool {
     unsafe {
         let Ok(snapshot) = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) else {
+            warn!("CreateToolhelp32Snapshot 失败，无法检测进程状态: {exe_name}");
             return false;
         };
 
@@ -656,6 +690,7 @@ fn is_process_running(exe_name: &str) -> bool {
 fn cleanup_orphaned_wintun() {
     const CR_NO_SUCH_DEVNODE: u32 = 0x0D; // 设备节点不存在
 
+    debug!("检查孤立 WinTUN 设备...");
     let mut instance_ids: Vec<String> = Vec::new();
 
     unsafe {
@@ -707,13 +742,25 @@ fn cleanup_orphaned_wintun() {
         }
     }
 
+    if instance_ids.is_empty() {
+        debug!("未发现孤立 WinTUN 设备");
+        return;
+    }
+    debug!("发现 {} 个孤立 WinTUN 设备", instance_ids.len());
+
     for id in &instance_ids {
-        let _ = hidden_command("pnputil")
+        debug!("移除孤立 WinTUN 设备: {id}");
+        let result = hidden_command("pnputil")
             .args(["/remove-device", id.as_str()])
             .status();
+        match result {
+            Ok(status) => debug!("pnputil /remove-device {id}: {status}"),
+            Err(e) => warn!("pnputil /remove-device {id} 执行失败: {e}"),
+        }
     }
 
     if !instance_ids.is_empty() {
+        debug!("扫描硬件变更 ({} 个设备已移除)", instance_ids.len());
         let _ = hidden_command("pnputil").arg("/scan-devices").status();
     }
 }

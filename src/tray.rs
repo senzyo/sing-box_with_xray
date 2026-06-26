@@ -30,6 +30,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WM_RBUTTONUP, WNDCLASSW, WS_OVERLAPPED, DI_NORMAL,
 };
 
+use tracing::warn;
 use crate::{AppState, ConfigAction, ConfigKind, ProcessState};
 
 /// 托盘图标的自定义消息 ID，当托盘收到鼠标事件时通过此消息通知窗口。
@@ -154,6 +155,7 @@ pub fn set_tooltip(text: &str) {
 pub(crate) unsafe fn load_icon_bitmap(exe_dir: &Path, icon_name: &str) -> isize {
     let icon_path = exe_dir.join("icons").join(icon_name);
     if !icon_path.exists() {
+        warn!("图标文件不存在: {}", icon_path.display());
         return 0;
     }
     let icon_path_w: Vec<u16> = icon_path.to_string_lossy().encode_utf16().chain(Some(0)).collect();
@@ -164,7 +166,10 @@ pub(crate) unsafe fn load_icon_bitmap(exe_dir: &Path, icon_name: &str) -> isize 
         16, 16,
         LR_LOADFROMFILE | LR_DEFAULTSIZE,
     );
-    let Ok(hicon) = hicon else { return 0; };
+    let Ok(hicon) = hicon else {
+        warn!("加载图标失败: {}", icon_path.display());
+        return 0;
+    };
     let hicon = HICON(hicon.0);
 
     let screen_dc = GetDC(None);
@@ -262,6 +267,9 @@ unsafe fn load_app_icon(h_instance: Option<HINSTANCE>, exe_dir: &Path) -> HICON 
         if let Ok(icon) = icon {
             return HICON(icon.0);
         }
+        warn!("加载托盘图标失败，回退到默认图标: {}", icon_path.display());
+    } else {
+        warn!("托盘图标不存在，回退到默认图标: {}", icon_path.display());
     }
     LoadIconW(None, IDI_APPLICATION).unwrap_or_default()
 }

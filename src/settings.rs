@@ -5,6 +5,7 @@
 
 use serde::Deserialize;
 use std::path::Path;
+use std::sync::Mutex;
 
 /// 应用配置，对应 `configs/settings.toml`。
 ///
@@ -18,6 +19,9 @@ pub struct Settings {
     #[serde(default)]
     pub download: Download,
 }
+
+/// 加载期间收集的警告信息，供 init_logging 之后通过 tracing 输出。
+static LOAD_WARNINGS: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
 /// GitHub CDN 代理配置。
 #[derive(Debug, Clone, Deserialize)]
@@ -108,7 +112,7 @@ impl Settings {
         let text = match std::fs::read_to_string(&path) {
             Ok(t) => t,
             Err(e) => {
-                eprintln!("警告: 读取配置文件失败 ({}), 使用默认配置: {e}", path.display());
+                push_warning(format!("读取配置文件失败 ({}), 使用默认配置: {e}", path.display()));
                 return Self::default();
             }
         };
@@ -119,10 +123,15 @@ impl Settings {
                 s
             }
             Err(e) => {
-                eprintln!("警告: 解析配置文件失败 ({}), 使用默认配置: {e}", path.display());
+                push_warning(format!("解析配置文件失败 ({}), 使用默认配置: {e}", path.display()));
                 Self::default()
             }
         }
+    }
+
+    /// 取出加载期间收集的警告。调用后清空，仅首次调用返回内容。
+    pub fn take_warnings() -> Vec<String> {
+        LOAD_WARNINGS.lock().unwrap_or_else(|e| e.into_inner()).drain(..).collect()
     }
 
     /// 校验配置值合法性，非法值回退到默认值。
@@ -131,27 +140,34 @@ impl Settings {
         if ALLOWED_LEVELS.contains(&level.as_str()) {
             self.log.level = level;
         } else {
-            eprintln!(
-                "警告: 无效的日志级别 \"{}\", 可选值: {:?}, 回退到 \"debug\"",
+            push_warning(format!(
+                "无效的日志级别 \"{}\", 可选值: {:?}, 回退到 \"debug\"",
                 self.log.level, ALLOWED_LEVELS
-            );
+            ));
             self.log.level = "debug".to_string();
         }
 
         if self.download.max_retries == 0 {
-            eprintln!("警告: max_retries 不能为 0, 回退到默认值 3");
+            push_warning("max_retries 不能为 0, 回退到默认值 3".to_string());
             self.download.max_retries = 3;
         }
 
         if self.download.retry_delay_secs == 0 {
-            eprintln!("警告: retry_delay_secs 不能为 0, 回退到默认值 2");
+            push_warning("retry_delay_secs 不能为 0, 回退到默认值 2".to_string());
             self.download.retry_delay_secs = 2;
         }
 
         if self.gh_proxy.enabled && self.gh_proxy.url.is_empty() {
-            eprintln!("警告: gh_proxy 已启用但 url 为空, 自动关闭代理");
+            push_warning("gh_proxy 已启用但 url 为空, 自动关闭代理".to_string());
             self.gh_proxy.enabled = false;
         }
+    }
+}
+
+fn push_warning(msg: String) {
+    eprintln!("警告: {msg}");
+    if let Ok(mut warnings) = LOAD_WARNINGS.lock() {
+        warnings.push(msg);
     }
 }
 

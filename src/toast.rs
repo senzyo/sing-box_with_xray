@@ -4,6 +4,7 @@
 //! 首次运行时会在开始菜单创建快捷方式并设置 AUMID（AppUserModelID），
 //! 这是 Windows 识别应用身份以显示 Toast 通知的必要条件。
 
+use tracing::error;
 use std::ffi::c_void;
 use std::os::windows::ffi::OsStrExt;
 use std::path::PathBuf;
@@ -50,6 +51,7 @@ pub fn show_toast(title: &str, message: &str) {
         icon_element(), xml_escape(title), xml_escape(message),
     );
     if let Err(e) = show_toast_xml(&xml, None) {
+        error!("Toast 通知失败: {e}");
         fallback_msgbox(title, &e);
     }
 }
@@ -61,6 +63,7 @@ pub fn show_toast_tagged(title: &str, message: &str, tag: &str) {
         icon_element(), xml_escape(title), xml_escape(message),
     );
     if let Err(e) = show_toast_xml(&xml, Some(tag)) {
+        error!("Toast 通知失败 (tag={tag}): {e}");
         fallback_msgbox(title, &e);
     }
 }
@@ -72,6 +75,7 @@ pub fn show_progress_toast(title: &str, tag: &str) {
         icon_element(), xml_escape(title),
     );
     if let Err(e) = show_toast_xml(&xml, Some(tag)) {
+        error!("进度 Toast 通知失败 (tag={tag}): {e}");
         fallback_msgbox(title, &e);
     }
 }
