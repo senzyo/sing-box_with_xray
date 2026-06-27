@@ -1,19 +1,30 @@
 <p align="center">
-    <img src="https://sing-box.sagernet.org/assets/icon.svg" width="100px" align="center" />&nbsp;&nbsp;
-    <img src="https://xtls.github.io/logo-light.svg" width="100px" align="center" />
+    <img src="https://raw.githubusercontent.com/microsoft/fluentui-emoji/62ecdc0d7ca5c6df32148c169556bc8d3782fca4/assets/Ladder/3D/ladder_3d.png" width="100px" align="center" />
     <h2 align="center">sing-box_with_xray</h2>
     <p align="center">
-        一个极简 Windows 托盘程序, 使用 sing-box TUN 搭配 Xray
+        一个极简 Windows 托盘程序, 同时管理 sing-box 和 Xray 核心程序。
     </p>
 </p>
 
 ## 简介
 
-sing-box 负责 TUN、路由和大部分流量处理。直连流量由 sing-box 直接出站, 代理流量由 sing-box 转发到本地 socks 出站, 再交给 Xray 与 VPS 通信。
+原方案用 PowerShell 脚本管理 sing-box 和 Xray, 现已归档到 [powershell](https://github.com/senzyo/sing-box_with_xray/tree/powershell) 分支。
 
-本项目已由 PowerShell 迁移到 Rust, 原脚本方案见 [powershell](https://github.com/senzyo/sing-box_with_xray/tree/powershell) 分支。
+main 分支是由 Rust 构建的新方案, 程序运行后常驻系统托盘, 单击程序图标即可打开菜单进行管理。
 
-main 分支为新方案, 程序不提供软件主界面, 运行后常驻系统托盘, 单击托盘图标即可打开菜单。
+`configs` 示例配置对双核心分工如下:
+
+```mermaid
+flowchart LR
+    A(用户软件) --> B(sing-box)
+    B -->|直连流量| C(目标网站)
+    B -->|需代理流量| D(本地 SOCKS)
+    D --> E(Xray)
+    E --> F(VPS)
+    F --> C
+```
+
+当然, 你可以根据需求更改 `configs` 中的配置文件, 比如仅运行其中一个核心。
 
 ## 功能
 
@@ -105,6 +116,6 @@ target\aarch64-pc-windows-msvc\release\sing-box_with_xray.exe   # arm64
 
 ### CI/CD
 
-推送到 `main` 分支时自动运行 clippy 和测试。
+推送到 `main` 分支时自动运行 `cargo clippy` 和 `cargo test`。
 
 推送 `v*` 标签或手动触发 workflow 时, 自动构建双架构并发布 GitHub Release。

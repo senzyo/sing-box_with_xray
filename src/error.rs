@@ -4,7 +4,6 @@ use thiserror::Error;
 
 /// 应用统一错误类型。
 #[derive(Error, Debug)]
-#[allow(dead_code)]
 pub enum AppError {
     #[error("{0}")]
     Msg(String),
@@ -16,14 +15,4 @@ pub enum AppError {
     Json(#[from] serde_json::Error),
 }
 
-impl From<String> for AppError {
-    fn from(s: String) -> Self {
-        AppError::Msg(s)
-    }
-}
 
-impl From<&str> for AppError {
-    fn from(s: &str) -> Self {
-        AppError::Msg(s.to_string())
-    }
-}

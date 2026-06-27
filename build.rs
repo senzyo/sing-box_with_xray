@@ -37,14 +37,14 @@ fn main() {
         let mut resource = winresource::WindowsResource::new();
         resource.set_manifest(manifest);
         resource.set_icon("icons/ladder.ico");
-        resource
-            .compile()
-            .expect("failed to compile Windows resources");
+        resource.compile().expect("failed to compile Windows resources");
 
         // OUT_DIR 形如 target/debug/build/<crate>/out，向上三级到达 profile 目录
         let out_dir = std::env::var("OUT_DIR").unwrap();
         let profile_dir = std::path::Path::new(&out_dir)
-            .parent().and_then(|p| p.parent()).and_then(|p| p.parent())
+            .parent()
+            .and_then(|p| p.parent())
+            .and_then(|p| p.parent())
             .expect("failed to resolve target profile dir");
 
         // 将图标和配置复制到输出目录，使可执行文件能通过相对路径访问

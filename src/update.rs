@@ -12,6 +12,8 @@ use std::path::Path;
 use std::process::Command;
 use tracing::{debug, error, info, warn};
 
+use crate::error::AppError;
+
 /// GitHub API 要求的 User-Agent 头，缺少会返回 403。
 const USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36 Edg/149.0.0.0";
 
@@ -38,14 +40,35 @@ pub fn update_cores(
     gh_proxy_url: &str,
     max_retries: u32,
     retry_delay_secs: u64,
-) -> Result<(), String> {
+) -> Result<(), AppError> {
     let exe_dir = exe_dir.to_path_buf();
-    update_sing_box(&exe_dir, sing_ver, gh_proxy_enabled, gh_proxy_url, max_retries, retry_delay_secs)?;
-    update_xray(&exe_dir, xray_ver, gh_proxy_enabled, gh_proxy_url, max_retries, retry_delay_secs)
+    update_sing_box(
+        &exe_dir,
+        sing_ver,
+        gh_proxy_enabled,
+        gh_proxy_url,
+        max_retries,
+        retry_delay_secs,
+    )?;
+    update_xray(
+        &exe_dir,
+        xray_ver,
+        gh_proxy_enabled,
+        gh_proxy_url,
+        max_retries,
+        retry_delay_secs,
+    )
 }
 
 /// 检查并更新 sing-box。本地版本已知时可跳过版本检测。
-pub fn update_sing_box(exe_dir: &Path, local_version: Option<&str>, gh_proxy_enabled: bool, gh_proxy_url: &str, max_retries: u32, retry_delay_secs: u64) -> Result<(), String> {
+pub fn update_sing_box(
+    exe_dir: &Path,
+    local_version: Option<&str>,
+    gh_proxy_enabled: bool,
+    gh_proxy_url: &str,
+    max_retries: u32,
+    retry_delay_secs: u64,
+) -> Result<(), AppError> {
     let exe_path = exe_dir.join("core").join("sing-box.exe");
     let api_url = "https://api.github.com/repos/SagerNet/sing-box/releases/latest";
 
@@ -57,7 +80,7 @@ pub fn update_sing_box(exe_dir: &Path, local_version: Option<&str>, gh_proxy_ena
     debug!("[sing-box] 版本比较: local={local}, remote={remote_ver}");
 
     if !is_newer(&local, &remote_ver) {
-        debug!("[sing-box] 已是最新版本，跳过更新");
+        info!("[sing-box] 已是最新版本，跳过更新");
         crate::toast::show_toast("sing-box", "当前已是最新版本");
         return Ok(());
     }
@@ -69,11 +92,14 @@ pub fn update_sing_box(exe_dir: &Path, local_version: Option<&str>, gh_proxy_ena
         Some(url) => url,
         None => {
             error!("[sing-box] 未找到发布文件: {zip_name}");
-            return Err(format!("未找到发布文件: {zip_name}"));
+            return Err(AppError::Msg(format!("未找到发布文件: {zip_name}")));
         }
     };
     let expected_hash = find_asset_digest(&assets, &zip_name);
-    debug!("[sing-box] 下载链接: {download_url}, SHA256: {}", expected_hash.as_deref().unwrap_or("无"));
+    debug!(
+        "[sing-box] 下载链接: {download_url}, SHA256: {}",
+        expected_hash.as_deref().unwrap_or("无")
+    );
 
     crate::toast::show_toast("sing-box", &format!("检测到新版本 v{remote_ver}"));
 
@@ -89,8 +115,7 @@ pub fn update_sing_box(exe_dir: &Path, local_version: Option<&str>, gh_proxy_ena
         gh_proxy_url,
         max_retries,
         retry_delay_secs,
-    )
-    {
+    ) {
         error!("[sing-box] 下载失败: {e}");
         crate::toast::show_toast_tagged("sing-box", "下载失败，请稍后重试", tag);
         return Ok(());
@@ -106,7 +131,14 @@ pub fn update_sing_box(exe_dir: &Path, local_version: Option<&str>, gh_proxy_ena
 }
 
 /// 检查并更新 xray。本地版本已知时可跳过版本检测。
-pub fn update_xray(exe_dir: &Path, local_version: Option<&str>, gh_proxy_enabled: bool, gh_proxy_url: &str, max_retries: u32, retry_delay_secs: u64) -> Result<(), String> {
+pub fn update_xray(
+    exe_dir: &Path,
+    local_version: Option<&str>,
+    gh_proxy_enabled: bool,
+    gh_proxy_url: &str,
+    max_retries: u32,
+    retry_delay_secs: u64,
+) -> Result<(), AppError> {
     let exe_path = exe_dir.join("core").join("xray.exe");
     let api_url = "https://api.github.com/repos/XTLS/Xray-core/releases/latest";
 
@@ -118,7 +150,7 @@ pub fn update_xray(exe_dir: &Path, local_version: Option<&str>, gh_proxy_enabled
     debug!("[xray] 版本比较: local={local}, remote={remote_ver}");
 
     if !is_newer(&local, &remote_ver) {
-        debug!("[xray] 已是最新版本，跳过更新");
+        info!("[xray] 已是最新版本，跳过更新");
         crate::toast::show_toast("xray", "当前已是最新版本");
         return Ok(());
     }
@@ -130,11 +162,14 @@ pub fn update_xray(exe_dir: &Path, local_version: Option<&str>, gh_proxy_enabled
         Some(url) => url,
         None => {
             error!("[xray] 未找到发布文件: {zip_name}");
-            return Err(format!("未找到发布文件: {zip_name}"));
+            return Err(AppError::Msg(format!("未找到发布文件: {zip_name}")));
         }
     };
     let expected_hash = find_asset_digest(&assets, zip_name);
-    debug!("[xray] 下载链接: {download_url}, SHA256: {}", expected_hash.as_deref().unwrap_or("无"));
+    debug!(
+        "[xray] 下载链接: {download_url}, SHA256: {}",
+        expected_hash.as_deref().unwrap_or("无")
+    );
 
     crate::toast::show_toast("xray", &format!("检测到新版本 v{remote_ver}"));
 
@@ -150,8 +185,7 @@ pub fn update_xray(exe_dir: &Path, local_version: Option<&str>, gh_proxy_enabled
         gh_proxy_url,
         max_retries,
         retry_delay_secs,
-    )
-    {
+    ) {
         error!("[xray] 下载失败: {e}");
         crate::toast::show_toast_tagged("xray", "下载失败，请稍后重试", tag);
         return Ok(());
@@ -234,31 +268,28 @@ fn is_newer(local: &str, remote: &str) -> bool {
 }
 
 /// 调用 GitHub Releases API 获取最新版本号和 assets 列表。
-fn fetch_release(api_url: &str) -> Result<(String, Vec<Value>), String> {
+fn fetch_release(api_url: &str) -> Result<(String, Vec<Value>), AppError> {
     debug!("请求 GitHub API: {api_url}");
     let resp = ureq::get(api_url)
         .header("User-Agent", USER_AGENT)
         .call()
-        .map_err(|e| format!("请求 GitHub API 失败: {e}"))?;
+        .map_err(|e| AppError::Msg(format!("请求 GitHub API 失败: {e}")))?;
 
     let body = resp
         .into_body()
         .read_to_string()
-        .map_err(|e| format!("读取 GitHub API 响应失败: {e}"))?;
+        .map_err(|e| AppError::Msg(format!("读取 GitHub API 响应失败: {e}")))?;
 
     let json: Value =
-        serde_json::from_str(&body).map_err(|e| format!("解析 GitHub API 响应失败: {e}"))?;
+        serde_json::from_str(&body).map_err(|e| AppError::Msg(format!("解析 GitHub API 响应失败: {e}")))?;
 
     let tag = json["tag_name"]
         .as_str()
-        .ok_or("GitHub API 响应缺少 tag_name")?
+        .ok_or(AppError::Msg("GitHub API 响应缺少 tag_name".into()))?
         .to_string();
 
     let version = tag.trim_start_matches('v').to_string();
-    let assets: Vec<Value> = json["assets"]
-        .as_array()
-        .cloned()
-        .unwrap_or_default();
+    let assets: Vec<Value> = json["assets"].as_array().cloned().unwrap_or_default();
 
     debug!("GitHub API 响应: tag={tag}, assets 数量={}", assets.len());
     Ok((version, assets))
@@ -294,13 +325,17 @@ fn download_with_retry(
     gh_proxy_url: &str,
     max_retries: u32,
     retry_delay_secs: u64,
-) -> Result<(), String> {
+) -> Result<(), AppError> {
     let url = if gh_proxy_enabled {
         format!("{gh_proxy_url}{download_url}")
     } else {
         download_url.to_string()
     };
-    debug!("下载准备: url={url}, 代理={}, hash={}", if gh_proxy_enabled { "启用" } else { "禁用" }, expected_hash.unwrap_or("无"));
+    debug!(
+        "下载准备: url={url}, 代理={}, hash={}",
+        if gh_proxy_enabled { "启用" } else { "禁用" },
+        expected_hash.unwrap_or("无")
+    );
 
     for attempt in 1..=max_retries {
         if attempt > 1 {
@@ -326,11 +361,11 @@ fn download_with_retry(
         }
     }
 
-    Err("下载文件校验失败，已达到最大重试次数".to_string())
+    Err(AppError::Msg("下载文件校验失败，已达到最大重试次数".into()))
 }
 
 /// 下载单个文件到指定路径，已存在时先删除。
-fn download_file(url: &str, dest: &Path) -> Result<(), String> {
+fn download_file(url: &str, dest: &Path) -> Result<(), AppError> {
     if dest.exists() {
         let _ = fs::remove_file(dest);
     }
@@ -338,32 +373,32 @@ fn download_file(url: &str, dest: &Path) -> Result<(), String> {
     let resp = ureq::get(url)
         .header("User-Agent", USER_AGENT)
         .call()
-        .map_err(|e| format!("下载失败: {e}"))?;
+        .map_err(|e| AppError::Msg(format!("下载失败: {e}")))?;
 
     let mut reader = resp.into_body().into_reader();
-    let mut file = fs::File::create(dest).map_err(|e| format!("创建文件失败: {e}"))?;
+    let mut file = fs::File::create(dest).map_err(|e| AppError::Msg(format!("创建文件失败: {e}")))?;
 
-    let bytes = io::copy(&mut reader, &mut file).map_err(|e| format!("写入文件失败: {e}"))?;
+    let bytes = io::copy(&mut reader, &mut file).map_err(|e| AppError::Msg(format!("写入文件失败: {e}")))?;
     debug!("下载完成: {} ({:.1} MB)", dest.display(), bytes as f64 / 1_048_576.0);
 
     Ok(())
 }
 
 /// 计算文件的 SHA256 哈希值，返回小写十六进制字符串。
-fn sha256_file(path: &Path) -> Result<String, String> {
-    let mut file =
-        fs::File::open(path).map_err(|e| format!("打开文件计算 SHA256 失败: {e}"))?;
+fn sha256_file(path: &Path) -> Result<String, AppError> {
+    let mut file = fs::File::open(path).map_err(|e| AppError::Msg(format!("打开文件计算 SHA256 失败: {e}")))?;
     let mut hasher = Sha256::new();
     let mut buf = [0u8; 8192];
     loop {
-        let n = file.read(&mut buf).map_err(|e| format!("读取文件计算 SHA256 失败: {e}"))?;
+        let n = file
+            .read(&mut buf)
+            .map_err(|e| AppError::Msg(format!("读取文件计算 SHA256 失败: {e}")))?;
         if n == 0 {
             break;
         }
         Digest::update(&mut hasher, &buf[..n]);
     }
-    let hash = hasher.finalize();
-    Ok(hash.iter().map(|b| format!("{b:02x}")).collect())
+    Ok(hasher.finalize().iter().map(|b| format!("{b:02x}")).collect())
 }
 
 /// 从 zip 文件中提取指定 exe 并替换目标路径。
@@ -371,51 +406,54 @@ fn sha256_file(path: &Path) -> Result<String, String> {
 /// 两轮搜索策略：
 /// 1. 先在 zip 根目录查找文件名完全匹配的条目（不包含路径分隔符）
 /// 2. 若未找到，再按路径后缀模糊匹配（兼容 exe 在子目录中的情况）
-fn replace_exe_from_zip(
-    zip_path: &Path,
-    exe_name_in_zip: &str,
-    exe_dest: &Path,
-) -> Result<(), String> {
+fn replace_exe_from_zip(zip_path: &Path, exe_name_in_zip: &str, exe_dest: &Path) -> Result<(), AppError> {
     debug!("从 zip 提取: {} -> {}", zip_path.display(), exe_dest.display());
-    let file = fs::File::open(zip_path)
-        .map_err(|e| format!("打开 zip 文件失败: {e}"))?;
+    let file = fs::File::open(zip_path).map_err(|e| AppError::Msg(format!("打开 zip 文件失败: {e}")))?;
     let reader = BufReader::new(file);
-    let mut archive =
-        zip::ZipArchive::new(reader).map_err(|e| format!("解析 zip 文件失败: {e}"))?;
+    let mut archive = zip::ZipArchive::new(reader).map_err(|e| AppError::Msg(format!("解析 zip 文件失败: {e}")))?;
+
+    let mut best_match: Option<usize> = None; // index of best match
+    let mut is_root_match = false;
 
     for i in 0..archive.len() {
-        let mut entry = archive
+        let entry = archive
             .by_index(i)
-            .map_err(|e| format!("读取 zip 条目失败: {e}"))?;
+            .map_err(|e| AppError::Msg(format!("读取 zip 条目失败: {e}")))?;
 
         let name = entry.name().to_string();
-        if name.ends_with(exe_name_in_zip) && !name.contains('/') {
-            let mut out = fs::File::create(exe_dest)
-                .map_err(|e| format!("创建目标 exe 文件失败: {e}"))?;
-            io::copy(&mut entry, &mut out)
-                .map_err(|e| format!("解压 exe 文件失败: {e}"))?;
-            debug!("提取成功: {} (根目录匹配)", entry.name());
-            return Ok(());
+        if name.ends_with(exe_name_in_zip) {
+            if !name.contains('/') {
+                // 根目录匹配，最高优先级
+                best_match = Some(i);
+                is_root_match = true;
+                break;
+            } else if best_match.is_none() {
+                // 子目录匹配，记录但继续找根目录匹配
+                best_match = Some(i);
+            }
         }
     }
 
-    for i in 0..archive.len() {
+    if let Some(idx) = best_match {
         let mut entry = archive
-            .by_index(i)
-            .map_err(|e| format!("读取 zip 条目失败: {e}"))?;
-
-        if entry.name().ends_with(exe_name_in_zip) {
-            let mut out = fs::File::create(exe_dest)
-                .map_err(|e| format!("创建目标 exe 文件失败: {e}"))?;
-            io::copy(&mut entry, &mut out)
-                .map_err(|e| format!("解压 exe 文件失败: {e}"))?;
-            debug!("提取成功: {} (子目录匹配)", entry.name());
-            return Ok(());
-        }
+            .by_index(idx)
+            .map_err(|e| AppError::Msg(format!("读取 zip 条目失败: {e}")))?;
+        let mut out = fs::File::create(exe_dest).map_err(|e| AppError::Msg(format!("创建目标 exe 文件失败: {e}")))?;
+        io::copy(&mut entry, &mut out).map_err(|e| AppError::Msg(format!("解压 exe 文件失败: {e}")))?;
+        debug!(
+            "提取成功: {} ({})",
+            entry.name(),
+            if is_root_match {
+                "根目录匹配"
+            } else {
+                "子目录匹配"
+            }
+        );
+        return Ok(());
     }
 
     error!("在 zip 中未找到: {exe_name_in_zip}");
-    Err(format!("在 zip 中未找到: {exe_name_in_zip}"))
+    Err(AppError::Msg(format!("在 zip 中未找到: {exe_name_in_zip}")))
 }
 
 #[cfg(test)]

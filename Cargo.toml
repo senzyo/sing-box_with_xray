@@ -1,24 +1,23 @@
 [package]
 name = "sing-box_with_xray"
-version = "2.1.0"
-edition = "2021"
+version = "2.3.1"
+edition = "2024"
 build = "build.rs"
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-toml = "0.8"
+toml = "1"
 sha2 = "0.11"
 thiserror = "2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-time = { version = "0.3", features = ["formatting", "macros", "parsing"] }
+time = { version = "0.3", features = ["formatting", "macros"] }
 ureq = "3"
-zip = "8"
+zip = { version = "8", default-features = false, features = ["deflate"] }
 windows = { version = "0.62", features = [
     "Data_Xml_Dom",
     "UI_Notifications",
-    "Win32_Devices_DeviceAndDriverInstallation",
     "Win32_Foundation",
     "Win32_Graphics_Gdi",
     "Win32_System_Com",

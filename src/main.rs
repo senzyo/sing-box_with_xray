@@ -12,6 +12,8 @@ mod toast;
 mod tray;
 mod update;
 
+use error::AppError;
+
 use serde_json::Value;
 use std::collections::HashMap;
 use std::ffi::OsStr;
@@ -20,36 +22,33 @@ use std::io::{BufRead, BufReader};
 use std::os::windows::ffi::OsStrExt;
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::ptr::null;
 use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 use time::OffsetDateTime;
-use tracing::{debug, error, info, warn, Event};
+use tracing::{Event, debug, error, info, warn};
 use tracing_subscriber::filter::EnvFilter;
 use tracing_subscriber::fmt::format::Writer;
 use tracing_subscriber::fmt::{FmtContext, FormatEvent, FormatFields};
 use tracing_subscriber::prelude::*;
-use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED};
-use windows::Win32::System::Console::{
-    GetStdHandle, SetConsoleMode, GetConsoleMode, CONSOLE_MODE,
-    ENABLE_VIRTUAL_TERMINAL_PROCESSING, STD_ERROR_HANDLE,
-};
 use windows::Win32::Foundation::{CloseHandle, HWND};
+use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx, CoUninitialize};
+use windows::Win32::System::Console::{
+    CONSOLE_MODE, ENABLE_VIRTUAL_TERMINAL_PROCESSING, GetConsoleMode, GetStdHandle, STD_ERROR_HANDLE, SetConsoleMode,
+};
 use windows::Win32::System::Diagnostics::ToolHelp::{
-    CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS,
+    CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW, TH32CS_SNAPPROCESS,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
-use windows::Win32::System::Threading::{
-    CREATE_NO_WINDOW, OpenProcess, TerminateProcess, PROCESS_TERMINATE,
-};
-use windows_sys::Win32::Devices::DeviceAndDriverInstallation::{
-    CM_Get_DevNode_Status, CM_Get_Device_ID_ListW, CM_Get_Device_ID_List_SizeW,
-    CM_Locate_DevNodeW, CR_SUCCESS, DN_HAS_PROBLEM, DN_STARTED,
-};
+use windows::Win32::System::Threading::{CREATE_NO_WINDOW, OpenProcess, PROCESS_TERMINATE, TerminateProcess};
 use windows::Win32::UI::WindowsAndMessaging::DestroyWindow;
+use windows_sys::Win32::Devices::DeviceAndDriverInstallation::{
+    CM_Get_DevNode_Status, CM_Get_Device_ID_List_SizeW, CM_Get_Device_ID_ListW, CM_Locate_DevNodeW, CR_SUCCESS,
+    DN_HAS_PROBLEM, DN_STARTED,
+};
 
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 enum ConfigKind {
     SingBox,
     Xray,
@@ -74,14 +73,39 @@ struct AppState {
     icon_yellow: isize,
     icon_red: isize,
     settings: settings::Settings,
+    /// 子进程句柄，用于直接 kill。
+    child_sing_box: Option<Child>,
+    child_xray: Option<Child>,
 }
 
 /// 全局应用状态，通过 OnceLock + Mutex 实现线程安全的单例。
 static APP: OnceLock<Mutex<AppState>> = OnceLock::new();
 
+/// COM 初始化守卫，Drop 时自动调用 CoUninitialize。
+struct ComGuard;
+
+impl ComGuard {
+    fn new() -> Result<Self, AppError> {
+        unsafe {
+            CoInitializeEx(None, COINIT_APARTMENTTHREADED)
+                .ok()
+                .map_err(|e| AppError::Msg(format!("初始化 COM 失败: {e}")))?;
+        }
+        Ok(Self)
+    }
+}
+
+impl Drop for ComGuard {
+    fn drop(&mut self) {
+        unsafe {
+            CoUninitialize();
+        }
+    }
+}
+
 fn main() {
     if let Err(err) = run() {
-        tray::show_error(0, "启动失败", &err);
+        tray::show_error(0, "启动失败", &err.to_string());
     }
 }
 
@@ -109,12 +133,7 @@ where
     S: tracing::Subscriber + for<'a> tracing_subscriber::registry::LookupSpan<'a>,
     N: for<'a> FormatFields<'a> + 'static,
 {
-    fn format_event(
-        &self,
-        ctx: &FmtContext<'_, S, N>,
-        mut writer: Writer<'_>,
-        event: &Event<'_>,
-    ) -> std::fmt::Result {
+    fn format_event(&self, ctx: &FmtContext<'_, S, N>, mut writer: Writer<'_>, event: &Event<'_>) -> std::fmt::Result {
         let now = OffsetDateTime::now_utc();
         let level = event.metadata().level();
         let color = level_color(level);
@@ -139,7 +158,7 @@ where
 /// 1. 为 Windows 控制台启用 ANSI 转义码支持（彩色输出）
 /// 2. 创建 console_layer（stderr）和 file_layer（app.log）
 /// 3. 日志级别优先使用 RUST_LOG 环境变量，否则使用 settings.toml 中的配置
-fn init_logging(exe_dir: &Path, log_level: &str) -> Result<(), String> {
+fn init_logging(exe_dir: &Path, log_level: &str) -> Result<(), AppError> {
     // 启用 Windows Terminal 的 ANSI 转义码处理，否则颜色代码会显示为乱码
     unsafe {
         if let Ok(handle) = GetStdHandle(STD_ERROR_HANDLE) {
@@ -150,8 +169,7 @@ fn init_logging(exe_dir: &Path, log_level: &str) -> Result<(), String> {
         }
     }
 
-    let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new(log_level));
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(log_level));
 
     let console_layer = tracing_subscriber::fmt::layer()
         .with_target(false)
@@ -160,8 +178,7 @@ fn init_logging(exe_dir: &Path, log_level: &str) -> Result<(), String> {
         .with_writer(std::io::stderr);
 
     let log_path = exe_dir.join("app.log");
-    let file = std::fs::File::create(log_path)
-        .map_err(|e| format!("创建日志文件失败: {e}"))?;
+    let file = std::fs::File::create(log_path).map_err(|e| AppError::Msg(format!("创建日志文件失败: {e}")))?;
     let file_layer = tracing_subscriber::fmt::layer()
         .with_ansi(false)
         .with_target(false)
@@ -174,27 +191,26 @@ fn init_logging(exe_dir: &Path, log_level: &str) -> Result<(), String> {
         .with(console_layer)
         .with(filter)
         .try_init()
-        .map_err(|e| format!("初始化日志系统失败: {e}"))?;
+        .map_err(|e| AppError::Msg(format!("初始化日志系统失败: {e}")))?;
 
     Ok(())
 }
 
 /// 应用主入口：初始化 COM → 创建目录 → 加载配置 → 初始化日志和 Toast →
 /// 检测版本 → 创建托盘图标 → 运行消息循环 → 退出时清理 GDI 资源。
-fn run() -> Result<(), String> {
+fn run() -> Result<(), AppError> {
     // 初始化 COM（单线程单元模式），Toast 通知和 ShellLink 都依赖 COM
-    unsafe {
-        CoInitializeEx(None, COINIT_APARTMENTTHREADED)
-            .ok()
-            .map_err(|e| format!("初始化 COM 失败: {e}"))?;
-    }
+    let _com = ComGuard::new()?;
 
-    let exe_path = std::env::current_exe().map_err(|e| e.to_string())?;
-    let exe_dir = exe_path.parent().ok_or("无法获取exe目录")?.to_path_buf();
+    let exe_path = std::env::current_exe()?;
+    let exe_dir = exe_path
+        .parent()
+        .ok_or(AppError::Msg("无法获取exe目录".into()))?
+        .to_path_buf();
 
-    fs::create_dir_all(exe_dir.join("core")).map_err(|e| e.to_string())?;
-    fs::create_dir_all(exe_dir.join("configs").join("sing-box")).map_err(|e| e.to_string())?;
-    fs::create_dir_all(exe_dir.join("configs").join("xray")).map_err(|e| e.to_string())?;
+    fs::create_dir_all(exe_dir.join("core"))?;
+    fs::create_dir_all(exe_dir.join("configs").join("sing-box"))?;
+    fs::create_dir_all(exe_dir.join("configs").join("xray"))?;
 
     let app_settings = settings::Settings::load(&exe_dir);
 
@@ -205,13 +221,17 @@ fn run() -> Result<(), String> {
     info!("程序启动, exe目录: {}", exe_dir.display());
     debug!(
         "生效配置: proxy={}({}), log_level={}, max_retries={}, retry_delay={}s",
-        if app_settings.gh_proxy.enabled { "enabled" } else { "disabled" },
+        if app_settings.gh_proxy.enabled {
+            "enabled"
+        } else {
+            "disabled"
+        },
         app_settings.gh_proxy.url,
         app_settings.log.level,
         app_settings.download.max_retries,
         app_settings.download.retry_delay_secs,
     );
-    toast::setup(&exe_path).map_err(|e| format!("初始化 Toast 通知失败: {e}"))?;
+    toast::setup(&exe_path).map_err(|e| AppError::Msg(format!("初始化 Toast 通知失败: {e}")))?;
 
     APP.set(Mutex::new(AppState {
         exe_dir: exe_dir.clone(),
@@ -222,11 +242,13 @@ fn run() -> Result<(), String> {
         icon_yellow: 0,
         icon_red: 0,
         settings: app_settings,
+        child_sing_box: None,
+        child_xray: None,
     }))
-    .map_err(|_| "初始化状态失败".to_string())?;
+    .map_err(|_| AppError::Msg("初始化状态失败".into()))?;
 
     {
-        let mut app = app_state_mut().ok_or("应用状态不可用")?;
+        let mut app = app_state_mut().ok_or(AppError::Msg("应用状态不可用".into()))?;
         unsafe {
             app.icon_green = tray::load_icon_bitmap(&exe_dir, "green_circle.ico");
             app.icon_yellow = tray::load_icon_bitmap(&exe_dir, "yellow_circle.ico");
@@ -235,7 +257,7 @@ fn run() -> Result<(), String> {
     }
 
     let tooltip = {
-        let mut app = app_state_mut().ok_or("应用状态不可用")?;
+        let mut app = app_state_mut().ok_or(AppError::Msg("应用状态不可用".into()))?;
         let (sing_ver, xray_ver) = detect_versions(&app.exe_dir);
         app.sing_box_version = sing_ver;
         app.xray_version = xray_ver;
@@ -244,7 +266,7 @@ fn run() -> Result<(), String> {
 
     unsafe {
         let h_instance = GetModuleHandleW(None)
-            .map_err(|e| format!("获取模块句柄失败: {e}"))?
+            .map_err(|e| AppError::Msg(format!("获取模块句柄失败: {e}")))?
             .0 as isize;
         let hwnd = tray::create_window(h_instance)?;
         tray::add_icon(hwnd, h_instance, &exe_dir)?;
@@ -256,9 +278,15 @@ fn run() -> Result<(), String> {
         unsafe {
             use windows::Win32::Graphics::Gdi::DeleteObject;
             use windows::Win32::Graphics::Gdi::HGDIOBJ;
-            if app.icon_green != 0 { let _ = DeleteObject(HGDIOBJ(app.icon_green as *mut std::ffi::c_void)); }
-            if app.icon_yellow != 0 { let _ = DeleteObject(HGDIOBJ(app.icon_yellow as *mut std::ffi::c_void)); }
-            if app.icon_red != 0 { let _ = DeleteObject(HGDIOBJ(app.icon_red as *mut std::ffi::c_void)); }
+            if app.icon_green != 0 {
+                let _ = DeleteObject(HGDIOBJ(app.icon_green as *mut std::ffi::c_void));
+            }
+            if app.icon_yellow != 0 {
+                let _ = DeleteObject(HGDIOBJ(app.icon_yellow as *mut std::ffi::c_void));
+            }
+            if app.icon_red != 0 {
+                let _ = DeleteObject(HGDIOBJ(app.icon_red as *mut std::ffi::c_void));
+            }
         }
     }
 
@@ -272,21 +300,23 @@ fn run() -> Result<(), String> {
 /// 进程并销毁窗口。
 fn execute_menu_command(hwnd: isize, id: u16) {
     let result = match id {
-        tray::ID_RESTART_SING | tray::ID_RESTART_XRAY | tray::ID_RESTART_ALL |
-        tray::ID_STOP_SING | tray::ID_STOP_XRAY | tray::ID_STOP_ALL => {
+        tray::ID_RESTART_SING
+        | tray::ID_RESTART_XRAY
+        | tray::ID_RESTART_ALL
+        | tray::ID_STOP_SING
+        | tray::ID_STOP_XRAY
+        | tray::ID_STOP_ALL => {
             let exe_dir = match exe_dir() {
                 Ok(d) => d,
                 Err(e) => {
                     error!("获取 exe 目录失败: {e}");
-                    tray::show_error(hwnd, "操作失败", &e);
+                    tray::show_error(hwnd, "操作失败", &e.to_string());
                     return;
                 }
             };
             // 子线程需要独立初始化 COM，否则 Toast 通知会失败
             std::thread::spawn(move || {
-                unsafe {
-                    let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
-                }
+                let _com = ComGuard::new();
                 let label = match id {
                     tray::ID_RESTART_SING => "重启 sing-box",
                     tray::ID_RESTART_XRAY => "重启 xray",
@@ -308,10 +338,7 @@ fn execute_menu_command(hwnd: isize, id: u16) {
                 };
                 if let Err(err) = result {
                     error!("操作失败: {err}");
-                    toast::show_toast("操作失败", &err);
-                }
-                unsafe {
-                    CoUninitialize();
+                    toast::show_toast("操作失败", &err.to_string());
                 }
             });
             return;
@@ -321,26 +348,43 @@ fn execute_menu_command(hwnd: isize, id: u16) {
                 Ok(d) => d,
                 Err(e) => {
                     error!("获取 exe 目录失败: {e}");
-                    tray::show_error(hwnd, "操作失败", &e);
+                    tray::show_error(hwnd, "操作失败", &e.to_string());
                     return;
                 }
             };
             let (sing_ver, xray_ver) = {
-                let app = app_state().expect("应用状态不可用");
+                let app = match app_state() {
+                    Some(a) => a,
+                    None => {
+                        error!("应用状态不可用");
+                        tray::show_error(hwnd, "操作失败", "应用状态不可用");
+                        return;
+                    }
+                };
                 (app.sing_box_version.clone(), app.xray_version.clone())
             };
             let (gh_enabled, gh_url, max_retries, retry_delay) = {
-                let app = app_state().expect("应用状态不可用");
+                let app = match app_state() {
+                    Some(a) => a,
+                    None => {
+                        error!("应用状态不可用");
+                        tray::show_error(hwnd, "操作失败", "应用状态不可用");
+                        return;
+                    }
+                };
                 let s = &app.settings;
-                (s.gh_proxy.enabled, s.gh_proxy.url.clone(), s.download.max_retries, s.download.retry_delay_secs)
+                (
+                    s.gh_proxy.enabled,
+                    s.gh_proxy.url.clone(),
+                    s.download.max_retries,
+                    s.download.retry_delay_secs,
+                )
             };
             if let Err(e) = stop_all() {
                 warn!("更新前终止进程失败: {e}");
             }
             std::thread::spawn(move || {
-                unsafe {
-                    let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
-                }
+                let _com = ComGuard::new();
                 let label = match id {
                     tray::ID_UPDATE_ALL => "更新所有核心",
                     tray::ID_UPDATE_SING => "更新 sing-box",
@@ -349,18 +393,37 @@ fn execute_menu_command(hwnd: isize, id: u16) {
                 };
                 info!("{label}");
                 let result = match id {
-                    tray::ID_UPDATE_ALL => update::update_cores(&exe_dir, sing_ver.as_deref(), xray_ver.as_deref(), gh_enabled, &gh_url, max_retries, retry_delay),
-                    tray::ID_UPDATE_SING => update::update_sing_box(&exe_dir, sing_ver.as_deref(), gh_enabled, &gh_url, max_retries, retry_delay),
-                    tray::ID_UPDATE_XRAY => update::update_xray(&exe_dir, xray_ver.as_deref(), gh_enabled, &gh_url, max_retries, retry_delay),
+                    tray::ID_UPDATE_ALL => update::update_cores(
+                        &exe_dir,
+                        sing_ver.as_deref(),
+                        xray_ver.as_deref(),
+                        gh_enabled,
+                        &gh_url,
+                        max_retries,
+                        retry_delay,
+                    ),
+                    tray::ID_UPDATE_SING => update::update_sing_box(
+                        &exe_dir,
+                        sing_ver.as_deref(),
+                        gh_enabled,
+                        &gh_url,
+                        max_retries,
+                        retry_delay,
+                    ),
+                    tray::ID_UPDATE_XRAY => update::update_xray(
+                        &exe_dir,
+                        xray_ver.as_deref(),
+                        gh_enabled,
+                        &gh_url,
+                        max_retries,
+                        retry_delay,
+                    ),
                     _ => unreachable!(),
                 };
                 refresh_versions_and_tooltip(&exe_dir);
                 if let Err(e) = result {
                     error!("更新失败: {e}");
-                    toast::show_toast("更新失败", &e);
-                }
-                unsafe {
-                    CoUninitialize();
+                    toast::show_toast("更新失败", &e.to_string());
                 }
             });
             return;
@@ -382,7 +445,9 @@ fn execute_menu_command(hwnd: isize, id: u16) {
             if let Err(e) = stop_all() {
                 warn!("退出时终止进程失败: {e}");
             }
-            unsafe { let _ = DestroyWindow(HWND(hwnd as *mut std::ffi::c_void)); }
+            unsafe {
+                let _ = DestroyWindow(HWND(hwnd as *mut std::ffi::c_void));
+            }
             Ok(())
         }
         _ => run_config_action(id),
@@ -390,32 +455,53 @@ fn execute_menu_command(hwnd: isize, id: u16) {
 
     if let Err(err) = result {
         error!("菜单命令执行失败: {err}");
-        toast::show_toast("操作失败", &err);
+        toast::show_toast("操作失败", &err.to_string());
     }
 }
 
-fn restart_all_at(exe_dir: &Path) -> Result<(), String> {
+fn restart_all_at(exe_dir: &Path) -> Result<(), AppError> {
     stop_all()?;
     start_sing_box_at(exe_dir)?;
     start_xray_at(exe_dir)
 }
 
-fn restart_sing_box_at(exe_dir: &Path) -> Result<(), String> {
+fn restart_sing_box_at(exe_dir: &Path) -> Result<(), AppError> {
     stop_processes(&["sing-box.exe"])?;
     start_sing_box_at(exe_dir)
 }
 
-fn restart_xray_at(exe_dir: &Path) -> Result<(), String> {
+fn restart_xray_at(exe_dir: &Path) -> Result<(), AppError> {
     stop_processes(&["xray.exe"])?;
     start_xray_at(exe_dir)
 }
 
 /// 终止所有已知子进程并刷新 DNS。
-fn stop_all() -> Result<(), String> {
+fn stop_all() -> Result<(), AppError> {
     stop_processes(&["sing-box.exe", "xray.exe"])
 }
 
-fn stop_processes(processes: &[&str]) -> Result<(), String> {
+fn stop_processes(processes: &[&str]) -> Result<(), AppError> {
+    // 先通过保存的 Child 句柄直接 kill
+    if let Some(mut app) = app_state_mut() {
+        for process in processes {
+            match *process {
+                "sing-box.exe" => {
+                    if let Some(ref mut child) = app.child_sing_box {
+                        let _ = child.kill();
+                    }
+                    app.child_sing_box = None;
+                }
+                "xray.exe" => {
+                    if let Some(ref mut child) = app.child_xray {
+                        let _ = child.kill();
+                    }
+                    app.child_xray = None;
+                }
+                _ => {}
+            }
+        }
+    }
+    // 再通过进程名枚举兜底（覆盖其他来源启动的同名进程）
     for process in processes {
         info!("终止进程: {process}");
         kill_processes_by_name(process);
@@ -424,12 +510,13 @@ fn stop_processes(processes: &[&str]) -> Result<(), String> {
     Ok(())
 }
 
-/// 通过 Win32 ToolHelp API 枚举所有进程，终止与 `exe_name` 匹配的进程。
-fn kill_processes_by_name(exe_name: &str) {
+/// 通过 Win32 ToolHelp API 枚举所有与 `exe_name` 匹配的进程，返回 PID 列表。
+fn find_pids_by_name(exe_name: &str) -> Vec<u32> {
+    let mut pids = Vec::new();
     unsafe {
         let Ok(snapshot) = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) else {
             warn!("CreateToolhelp32Snapshot 失败，无法枚举进程");
-            return;
+            return pids;
         };
 
         let mut entry: PROCESSENTRY32W = std::mem::zeroed();
@@ -437,15 +524,15 @@ fn kill_processes_by_name(exe_name: &str) {
 
         if Process32FirstW(snapshot, &mut entry).is_ok() {
             loop {
-                let end = entry.szExeFile.iter().position(|&c| c == 0).unwrap_or(entry.szExeFile.len());
+                let end = entry
+                    .szExeFile
+                    .iter()
+                    .position(|&c| c == 0)
+                    .unwrap_or(entry.szExeFile.len());
                 let name_bytes = &entry.szExeFile[..end];
                 let name = String::from_utf16_lossy(name_bytes);
                 if name.eq_ignore_ascii_case(exe_name) {
-                    if let Ok(handle) = OpenProcess(PROCESS_TERMINATE, false, entry.th32ProcessID) {
-                        debug!("终止进程: {} (PID {})", exe_name, entry.th32ProcessID);
-                        let _ = TerminateProcess(handle, 1);
-                        let _ = CloseHandle(handle);
-                    }
+                    pids.push(entry.th32ProcessID);
                 }
                 if Process32NextW(snapshot, &mut entry).is_err() {
                     break;
@@ -455,10 +542,29 @@ fn kill_processes_by_name(exe_name: &str) {
 
         let _ = CloseHandle(snapshot);
     }
+    pids
+}
+
+/// 终止与 `exe_name` 匹配的所有进程。
+fn kill_processes_by_name(exe_name: &str) {
+    for pid in find_pids_by_name(exe_name) {
+        unsafe {
+            if let Ok(handle) = OpenProcess(PROCESS_TERMINATE, false, pid) {
+                debug!("终止进程: {} (PID {})", exe_name, pid);
+                let _ = TerminateProcess(handle, 1);
+                let _ = CloseHandle(handle);
+            }
+        }
+    }
+}
+
+/// 检查指定名称的进程是否正在运行。
+fn is_process_running(exe_name: &str) -> bool {
+    !find_pids_by_name(exe_name).is_empty()
 }
 
 /// 启动 sing-box 子进程。启动前清理孤立 WinTUN 设备并随机化 TUN 接口名。
-fn start_sing_box_at(exe_dir: &Path) -> Result<(), String> {
+fn start_sing_box_at(exe_dir: &Path) -> Result<(), AppError> {
     cleanup_orphaned_wintun();
 
     let exe = exe_dir.join("core").join("sing-box.exe");
@@ -478,7 +584,7 @@ fn start_sing_box_at(exe_dir: &Path) -> Result<(), String> {
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .spawn()
-        .map_err(|e| format!("启动 sing-box 失败: {e}"))?;
+        .map_err(|e| AppError::Msg(format!("启动 sing-box 失败: {e}")))?;
     if let Some(stderr) = child.stderr.take() {
         std::thread::spawn(move || {
             let reader = BufReader::new(stderr);
@@ -487,12 +593,15 @@ fn start_sing_box_at(exe_dir: &Path) -> Result<(), String> {
             }
         });
     }
+    if let Some(mut app) = app_state_mut() {
+        app.child_sing_box = Some(child);
+    }
 
     Ok(())
 }
 
 /// 启动 xray 子进程，stderr 输出重定向到日志。
-fn start_xray_at(exe_dir: &Path) -> Result<(), String> {
+fn start_xray_at(exe_dir: &Path) -> Result<(), AppError> {
     let exe = exe_dir.join("core").join("xray.exe");
     let config = exe_dir.join("configs").join("xray.json");
 
@@ -507,7 +616,7 @@ fn start_xray_at(exe_dir: &Path) -> Result<(), String> {
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .spawn()
-        .map_err(|e| format!("启动 xray 失败: {e}"))?;
+        .map_err(|e| AppError::Msg(format!("启动 xray 失败: {e}")))?;
     if let Some(stderr) = child.stderr.take() {
         std::thread::spawn(move || {
             let reader = BufReader::new(stderr);
@@ -516,14 +625,17 @@ fn start_xray_at(exe_dir: &Path) -> Result<(), String> {
             }
         });
     }
+    if let Some(mut app) = app_state_mut() {
+        app.child_xray = Some(child);
+    }
 
     Ok(())
 }
 
 /// 执行配置切换操作：将选中的配置文件复制到活跃配置路径并重启对应服务。
-fn run_config_action(id: u16) -> Result<(), String> {
+fn run_config_action(id: u16) -> Result<(), AppError> {
     let action = {
-        let app = app_state().ok_or("应用状态不可用")?;
+        let app = app_state().ok_or(AppError::Msg("应用状态不可用".into()))?;
         app.config_actions.get(&id).cloned()
     };
 
@@ -537,15 +649,13 @@ fn run_config_action(id: u16) -> Result<(), String> {
         ConfigKind::SingBox => {
             let dest = exe_dir.join("configs").join("sing-box.json");
             debug!("复制配置: {} -> {}", action.path.display(), dest.display());
-            fs::copy(&action.path, dest)
-                .map_err(|e| format!("切换 sing-box 配置失败: {e}"))?;
+            fs::copy(&action.path, dest).map_err(|e| AppError::Msg(format!("切换 sing-box 配置失败: {e}")))?;
             restart_sing_box_at(&exe_dir)
         }
         ConfigKind::Xray => {
             let dest = exe_dir.join("configs").join("xray.json");
             debug!("复制配置: {} -> {}", action.path.display(), dest.display());
-            fs::copy(&action.path, dest)
-                .map_err(|e| format!("切换 xray 配置失败: {e}"))?;
+            fs::copy(&action.path, dest).map_err(|e| AppError::Msg(format!("切换 xray 配置失败: {e}")))?;
             restart_xray_at(&exe_dir)
         }
     }
@@ -557,11 +667,9 @@ fn run_config_action(id: u16) -> Result<(), String> {
 /// 未完全释放会导致冲突。通过每次启动时生成随机 6 位十六进制名称来避免。
 ///
 /// 使用字符串替换而非 JSON 序列化来保留原始配置的格式和注释。
-fn randomize_tun_name(config_path: &Path) -> Result<(), String> {
-    let text =
-        fs::read_to_string(config_path).map_err(|e| format!("读取 sing-box 配置失败: {e}"))?;
-    let json: Value =
-        serde_json::from_str(&text).map_err(|e| format!("解析 sing-box 配置失败: {e}"))?;
+fn randomize_tun_name(config_path: &Path) -> Result<(), AppError> {
+    let text = fs::read_to_string(config_path).map_err(|e| AppError::Msg(format!("读取 sing-box 配置失败: {e}")))?;
+    let json: Value = serde_json::from_str(&text).map_err(|e| AppError::Msg(format!("解析 sing-box 配置失败: {e}")))?;
     let new_name = random_hex_name();
 
     let old_name = json
@@ -576,7 +684,7 @@ fn randomize_tun_name(config_path: &Path) -> Result<(), String> {
                 }
             })
         })
-        .ok_or("未在 sing-box.json 中找到 type=tun 的 inbound".to_string())?;
+        .ok_or(AppError::Msg("未在 sing-box.json 中找到 type=tun 的 inbound".into()))?;
 
     if old_name == new_name {
         return Ok(());
@@ -587,34 +695,33 @@ fn randomize_tun_name(config_path: &Path) -> Result<(), String> {
     let old_pattern = format!("\"interface_name\": \"{}\"", old_name);
     let new_pattern = format!("\"interface_name\": \"{}\"", new_name);
     let new_text = text.replacen(&old_pattern, &new_pattern, 1);
-    fs::write(config_path, new_text).map_err(|e| format!("写入 sing-box 配置失败: {e}"))
+    fs::write(config_path, new_text).map_err(|e| AppError::Msg(format!("写入 sing-box 配置失败: {e}")))
 }
 
 /// 生成 6 位随机十六进制字符串，用作 TUN 接口名。
-/// 取纳秒时间戳的低 24 位（6 个十六进制字符），同一纳秒内重复调用可能冲突。
+/// 使用 RandomState 对时间戳做哈希，每次运行种子不同。
 fn random_hex_name() -> String {
+    use std::hash::{BuildHasher, Hasher};
+    let seed = std::hash::RandomState::new();
+    let mut hasher = seed.build_hasher();
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_nanos())
+        .map(|d| d.as_nanos())
         .unwrap_or_default();
-    format!("{:06x}", nanos & 0xFF_FFFF)
+    hasher.write_u128(nanos);
+    format!("{:06x}", hasher.finish() & 0xFF_FFFF)
 }
 
 /// 创建不显示控制台窗口的子进程 Command。
-fn run_hidden_program(program: impl AsRef<OsStr>) -> Command {
+fn hidden_command(program: impl AsRef<OsStr>) -> Command {
     let mut command = Command::new(program);
     command.creation_flags(CREATE_NO_WINDOW.0);
     command
 }
 
-/// `run_hidden_program` 的别名，语义更清晰的调用入口。
-fn hidden_command(program: impl AsRef<OsStr>) -> Command {
-    run_hidden_program(program)
-}
-
 // dnsapi.dll 导入，用于刷新系统 DNS 缓存。
 #[link(name = "dnsapi")]
-extern "system" {
+unsafe extern "system" {
     fn DnsFlushResolverCache() -> i32;
 }
 
@@ -654,37 +761,6 @@ fn xray_state(app: &AppState) -> ProcessState {
         ProcessState::Running
     } else {
         ProcessState::NotRunning
-    }
-}
-
-/// 检查指定名称的进程是否正在运行。
-fn is_process_running(exe_name: &str) -> bool {
-    unsafe {
-        let Ok(snapshot) = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) else {
-            warn!("CreateToolhelp32Snapshot 失败，无法检测进程状态: {exe_name}");
-            return false;
-        };
-
-        let mut entry: PROCESSENTRY32W = std::mem::zeroed();
-        entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
-
-        if Process32FirstW(snapshot, &mut entry).is_ok() {
-            loop {
-                let end = entry.szExeFile.iter().position(|&c| c == 0).unwrap_or(entry.szExeFile.len());
-                let name_bytes = &entry.szExeFile[..end];
-                let name = String::from_utf16_lossy(name_bytes);
-                if name.eq_ignore_ascii_case(exe_name) {
-                    let _ = CloseHandle(snapshot);
-                    return true;
-                }
-                if Process32NextW(snapshot, &mut entry).is_err() {
-                    break;
-                }
-            }
-        }
-
-        let _ = CloseHandle(snapshot);
-        false
     }
 }
 
@@ -762,9 +838,7 @@ fn cleanup_orphaned_wintun() {
 
     for id in &instance_ids {
         debug!("移除孤立 WinTUN 设备: {id}");
-        let result = hidden_command("pnputil")
-            .args(["/remove-device", id.as_str()])
-            .status();
+        let result = hidden_command("pnputil").args(["/remove-device", id.as_str()]).status();
         match result {
             Ok(status) => debug!("pnputil /remove-device {id}: {status}"),
             Err(e) => warn!("pnputil /remove-device {id} 执行失败: {e}"),
@@ -777,11 +851,11 @@ fn cleanup_orphaned_wintun() {
     }
 }
 
-fn ensure_exists(path: &Path) -> Result<(), String> {
+fn ensure_exists(path: &Path) -> Result<(), AppError> {
     if path.exists() {
         Ok(())
     } else {
-        Err(format!("文件不存在: {}", path.display()))
+        Err(AppError::Msg(format!("文件不存在: {}", path.display())))
     }
 }
 
@@ -802,15 +876,15 @@ fn find_json_configs(dirs: &[PathBuf]) -> Vec<PathBuf> {
         }
     }
 
-    paths.sort_by_key(|path| path.file_name().map(|name| name.to_os_string()));
+    paths.sort_by(|a, b| a.file_name().cmp(&b.file_name()));
     paths.dedup();
     paths
 }
 
-fn exe_dir() -> Result<PathBuf, String> {
+fn exe_dir() -> Result<PathBuf, AppError> {
     app_state()
         .map(|app| app.exe_dir.clone())
-        .ok_or_else(|| "应用状态不可用".to_string())
+        .ok_or_else(|| AppError::Msg("应用状态不可用".into()))
 }
 
 fn app_state() -> Option<std::sync::MutexGuard<'static, AppState>> {
@@ -823,7 +897,7 @@ fn app_state_mut() -> Option<std::sync::MutexGuard<'static, AppState>> {
     app_state()
 }
 
-fn wide(value: &str) -> Vec<u16> {
+pub(crate) fn wide(value: &str) -> Vec<u16> {
     OsStr::new(value).encode_wide().chain(Some(0)).collect()
 }
 
@@ -849,11 +923,15 @@ fn detect_versions(exe_dir: &Path) -> (Option<String>, Option<String>) {
     let sing_ver = if sing_exe.exists() {
         let v = update::get_local_version(&sing_exe, "version");
         if v != "0.0.0" { Some(v) } else { None }
-    } else { None };
+    } else {
+        None
+    };
     let xray_ver = if xray_exe.exists() {
         let v = update::get_local_version(&xray_exe, "version");
         if v != "0.0.0" { Some(v) } else { None }
-    } else { None };
+    } else {
+        None
+    };
     (sing_ver, xray_ver)
 }
 
@@ -881,5 +959,3 @@ fn refresh_versions_and_tooltip(exe_dir: &Path) {
         tray::set_tooltip(&tooltip);
     }
 }
-
-

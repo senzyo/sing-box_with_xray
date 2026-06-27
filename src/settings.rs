@@ -131,7 +131,11 @@ impl Settings {
 
     /// 取出加载期间收集的警告。调用后清空，仅首次调用返回内容。
     pub fn take_warnings() -> Vec<String> {
-        LOAD_WARNINGS.lock().unwrap_or_else(|e| e.into_inner()).drain(..).collect()
+        LOAD_WARNINGS
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .drain(..)
+            .collect()
     }
 
     /// 校验配置值合法性，非法值回退到默认值。
@@ -170,5 +174,3 @@ fn push_warning(msg: String) {
         warnings.push(msg);
     }
 }
-
-
