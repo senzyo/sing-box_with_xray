@@ -40,11 +40,12 @@ flowchart LR
 ```text
 sing-box_with_xray/
 ├── sing-box_with_xray.exe   # 托盘程序
-├── core/
-│   ├── sing-box.exe          # sing-box 核心
+├── settings.toml             # 程序配置 (代理、日志、下载重试)
+├── sing-box_core/
+│   └── sing-box.exe          # sing-box 核心
+├── xray_core/
 │   └── xray.exe              # xray 核心
 ├── configs/
-│   ├── settings.toml         # 程序配置 (代理、日志、下载重试)
 │   ├── sing-box.json         # 当前使用的 sing-box 配置
 │   ├── xray.json             # 当前使用的 xray 配置
 │   ├── sing-box/             # 可切换的 sing-box 配置
@@ -58,7 +59,7 @@ sing-box_with_xray/
 
 ## 配置
 
-编辑 `configs/settings.toml` 可调整以下设置:
+编辑 `settings.toml` 可调整以下设置:
 
 | 配置项                      | 默认值                  | 说明                                   |
 | --------------------------- | ----------------------- | -------------------------------------- |

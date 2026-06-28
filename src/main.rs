@@ -162,7 +162,8 @@ fn run() -> Result<(), AppError> {
         .ok_or(AppError::Msg("无法获取exe目录".into()))?
         .to_path_buf();
 
-    fs::create_dir_all(exe_dir.join("core"))?;
+    fs::create_dir_all(exe_dir.join("sing-box_core"))?;
+    fs::create_dir_all(exe_dir.join("xray_core"))?;
     fs::create_dir_all(exe_dir.join("configs").join("sing-box"))?;
     fs::create_dir_all(exe_dir.join("configs").join("xray"))?;
 

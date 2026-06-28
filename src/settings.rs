@@ -1,13 +1,13 @@
 //! 配置文件加载。
 //!
-//! 从 `configs/settings.toml` 读取用户配置（GitHub 代理、日志级别、下载重试参数）。
+//! 从 `settings.toml` 读取用户配置（GitHub 代理、日志级别、下载重试参数）。
 //! 文件缺失或解析失败时静默回退到默认值，不中断程序运行。
 
 use serde::Deserialize;
 use std::path::Path;
 use std::sync::Mutex;
 
-/// 应用配置，对应 `configs/settings.toml`。
+/// 应用配置，对应 `settings.toml`。
 ///
 /// 所有字段均提供默认值，配置文件缺失或解析失败时自动回退。
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -104,10 +104,10 @@ impl Default for Download {
 const ALLOWED_LEVELS: &[&str] = &["debug", "info", "warn", "error"];
 
 impl Settings {
-    /// 从 `exe_dir/configs/settings.toml` 加载配置。
+    /// 从 `exe_dir/settings.toml` 加载配置。
     /// 文件不存在或格式错误时打印警告并返回默认值。
     pub fn load(exe_dir: &Path) -> Self {
-        let path = exe_dir.join("configs").join("settings.toml");
+        let path = exe_dir.join("settings.toml");
 
         let text = match std::fs::read_to_string(&path) {
             Ok(t) => t,

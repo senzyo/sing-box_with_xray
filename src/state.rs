@@ -152,7 +152,7 @@ pub fn is_process_running(exe_name: &str) -> bool {
 
 /// 查询 sing-box 进程运行状态。
 pub fn sing_box_state(app: &AppState) -> ProcessState {
-    if !app.exe_dir.join("core").join("sing-box.exe").exists() {
+    if !app.exe_dir.join("sing-box_core").join("sing-box.exe").exists() {
         return ProcessState::NotInstalled;
     }
     if is_process_running("sing-box.exe") {
@@ -164,7 +164,7 @@ pub fn sing_box_state(app: &AppState) -> ProcessState {
 
 /// 查询 xray 进程运行状态。
 pub fn xray_state(app: &AppState) -> ProcessState {
-    if !app.exe_dir.join("core").join("xray.exe").exists() {
+    if !app.exe_dir.join("xray_core").join("xray.exe").exists() {
         return ProcessState::NotInstalled;
     }
     if is_process_running("xray.exe") {
@@ -177,8 +177,8 @@ pub fn xray_state(app: &AppState) -> ProcessState {
 /// 检测本地 sing-box 和 xray 的版本。
 /// 版本号为 "0.0.0" 表示可执行文件存在但无法获取版本，视为未安装。
 pub fn detect_versions(exe_dir: &Path) -> (Option<String>, Option<String>) {
-    let sing_exe = exe_dir.join("core").join("sing-box.exe");
-    let xray_exe = exe_dir.join("core").join("xray.exe");
+    let sing_exe = exe_dir.join("sing-box_core").join("sing-box.exe");
+    let xray_exe = exe_dir.join("xray_core").join("xray.exe");
     let sing_ver = if sing_exe.exists() {
         let v = crate::update::get_local_version(&sing_exe, "version");
         if v != "0.0.0" { Some(v) } else { None }

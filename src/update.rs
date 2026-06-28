@@ -8,7 +8,7 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::io::{self, BufReader, Read};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use tracing::{debug, error, info, warn};
 
@@ -69,7 +69,7 @@ pub fn update_sing_box(
     max_retries: u32,
     retry_delay_secs: u64,
 ) -> Result<(), AppError> {
-    let exe_path = exe_dir.join("core").join("sing-box.exe");
+    let exe_path = exe_dir.join("sing-box_core").join("sing-box.exe");
     let api_url = "https://api.github.com/repos/SagerNet/sing-box/releases/latest";
 
     let local = match local_version {
@@ -121,8 +121,9 @@ pub fn update_sing_box(
         return Ok(());
     }
 
-    let exe_in_zip = format!("sing-box-{}-windows-{}/sing-box.exe", remote_ver, SINGBOX_ARCH_SUFFIX);
-    replace_exe_from_zip(&zip_path, &exe_in_zip, &exe_path)?;
+    let core_dir = exe_dir.join("sing-box_core");
+    let nested_prefix = format!("sing-box-{}-windows-{}/", remote_ver, SINGBOX_ARCH_SUFFIX);
+    backup_and_extract(&zip_path, &core_dir, Some(&nested_prefix))?;
 
     let _ = fs::remove_file(&zip_path);
     info!("[sing-box] 更新完成 -> v{remote_ver}");
@@ -139,7 +140,7 @@ pub fn update_xray(
     max_retries: u32,
     retry_delay_secs: u64,
 ) -> Result<(), AppError> {
-    let exe_path = exe_dir.join("core").join("xray.exe");
+    let exe_path = exe_dir.join("xray_core").join("xray.exe");
     let api_url = "https://api.github.com/repos/XTLS/Xray-core/releases/latest";
 
     let local = match local_version {
@@ -191,7 +192,8 @@ pub fn update_xray(
         return Ok(());
     }
 
-    replace_exe_from_zip(&zip_path, "xray.exe", &exe_path)?;
+    let core_dir = exe_dir.join("xray_core");
+    backup_and_extract(&zip_path, &core_dir, None)?;
 
     let _ = fs::remove_file(&zip_path);
     info!("[xray] 更新完成 -> v{remote_ver}");
@@ -401,59 +403,69 @@ fn sha256_file(path: &Path) -> Result<String, AppError> {
     Ok(hasher.finalize().iter().map(|b| format!("{b:02x}")).collect())
 }
 
-/// 从 zip 文件中提取指定 exe 并替换目标路径。
+/// 备份核心目录并从 zip 解压全部内容。
 ///
-/// 两轮搜索策略：
-/// 1. 先在 zip 根目录查找文件名完全匹配的条目（不包含路径分隔符）
-/// 2. 若未找到，再按路径后缀模糊匹配（兼容 exe 在子目录中的情况）
-fn replace_exe_from_zip(zip_path: &Path, exe_name_in_zip: &str, exe_dest: &Path) -> Result<(), AppError> {
-    debug!("从 zip 提取: {} -> {}", zip_path.display(), exe_dest.display());
+/// 1. 删除 `{core_dir}_backup`（如存在）
+/// 2. 重命名 `{core_dir}` → `{core_dir}_backup`
+/// 3. 解压 zip 全部内容到 `{core_dir}`
+///
+/// `strip_prefix` 为 Some 时，跳过 zip 中以此开头的顶层目录（用于 sing-box 的嵌套目录结构）。
+fn backup_and_extract(zip_path: &Path, core_dir: &Path, strip_prefix: Option<&str>) -> Result<(), AppError> {
+    let backup_dir = PathBuf::from(format!("{}_backup", core_dir.display()));
+
+    if backup_dir.exists() {
+        debug!("删除旧备份: {}", backup_dir.display());
+        fs::remove_dir_all(&backup_dir).map_err(|e| AppError::Msg(format!("删除旧备份失败: {e}")))?;
+    }
+
+    if core_dir.exists() {
+        debug!("备份: {} -> {}", core_dir.display(), backup_dir.display());
+        fs::rename(core_dir, &backup_dir).map_err(|e| AppError::Msg(format!("备份目录失败: {e}")))?;
+    }
+
+    fs::create_dir_all(core_dir).map_err(|e| AppError::Msg(format!("创建核心目录失败: {e}")))?;
+
     let file = fs::File::open(zip_path).map_err(|e| AppError::Msg(format!("打开 zip 文件失败: {e}")))?;
     let reader = BufReader::new(file);
     let mut archive = zip::ZipArchive::new(reader).map_err(|e| AppError::Msg(format!("解析 zip 文件失败: {e}")))?;
 
-    let mut best_match: Option<usize> = None; // index of best match
-    let mut is_root_match = false;
-
     for i in 0..archive.len() {
-        let entry = archive
+        let mut entry = archive
             .by_index(i)
             .map_err(|e| AppError::Msg(format!("读取 zip 条目失败: {e}")))?;
 
-        let name = entry.name().to_string();
-        if name.ends_with(exe_name_in_zip) {
-            if !name.contains('/') {
-                // 根目录匹配，最高优先级
-                best_match = Some(i);
-                is_root_match = true;
-                break;
-            } else if best_match.is_none() {
-                // 子目录匹配，记录但继续找根目录匹配
-                best_match = Some(i);
+        let raw_name = entry.name().to_string();
+
+        let rel_path = match strip_prefix {
+            Some(prefix) => {
+                if let Some(rest) = raw_name.strip_prefix(prefix) {
+                    rest.to_string()
+                } else {
+                    continue;
+                }
             }
+            None => raw_name,
+        };
+
+        if rel_path.is_empty() {
+            continue;
+        }
+
+        let out_path = core_dir.join(&rel_path);
+
+        if entry.is_dir() {
+            fs::create_dir_all(&out_path).map_err(|e| AppError::Msg(format!("创建目录失败: {e}")))?;
+        } else {
+            if let Some(parent) = out_path.parent() {
+                fs::create_dir_all(parent).map_err(|e| AppError::Msg(format!("创建父目录失败: {e}")))?;
+            }
+            let mut out = fs::File::create(&out_path).map_err(|e| AppError::Msg(format!("创建文件失败: {e}")))?;
+            io::copy(&mut entry, &mut out).map_err(|e| AppError::Msg(format!("解压文件失败: {e}")))?;
         }
     }
 
-    if let Some(idx) = best_match {
-        let mut entry = archive
-            .by_index(idx)
-            .map_err(|e| AppError::Msg(format!("读取 zip 条目失败: {e}")))?;
-        let mut out = fs::File::create(exe_dest).map_err(|e| AppError::Msg(format!("创建目标 exe 文件失败: {e}")))?;
-        io::copy(&mut entry, &mut out).map_err(|e| AppError::Msg(format!("解压 exe 文件失败: {e}")))?;
-        debug!(
-            "提取成功: {} ({})",
-            entry.name(),
-            if is_root_match {
-                "根目录匹配"
-            } else {
-                "子目录匹配"
-            }
-        );
-        return Ok(());
-    }
-
-    error!("在 zip 中未找到: {exe_name_in_zip}");
-    Err(AppError::Msg(format!("在 zip 中未找到: {exe_name_in_zip}")))
+    debug!("解压完成: {} -> {}", zip_path.display(), core_dir.display());
+    Ok(())
 }
 
 #[cfg(test)]

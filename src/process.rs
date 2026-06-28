@@ -45,7 +45,7 @@ pub fn hidden_command(program: impl AsRef<OsStr>) -> Command {
 pub fn start_sing_box_at(exe_dir: &Path) -> Result<(), AppError> {
     cleanup_orphaned_wintun();
 
-    let exe = exe_dir.join("core").join("sing-box.exe");
+    let exe = exe_dir.join("sing-box_core").join("sing-box.exe");
     let config = exe_dir.join("configs").join("sing-box.json");
 
     state::ensure_exists(&exe)?;
@@ -55,7 +55,7 @@ pub fn start_sing_box_at(exe_dir: &Path) -> Result<(), AppError> {
     info!("启动 sing-box");
     let mut child = hidden_command(exe)
         .args(["run", "-D"])
-        .arg(exe_dir)
+        .arg(exe_dir.join("sing-box_core"))
         .arg("-c")
         .arg(config)
         .current_dir(exe_dir)
@@ -80,7 +80,7 @@ pub fn start_sing_box_at(exe_dir: &Path) -> Result<(), AppError> {
 
 /// 启动 xray 子进程，stderr 输出重定向到日志。
 pub fn start_xray_at(exe_dir: &Path) -> Result<(), AppError> {
-    let exe = exe_dir.join("core").join("xray.exe");
+    let exe = exe_dir.join("xray_core").join("xray.exe");
     let config = exe_dir.join("configs").join("xray.json");
 
     state::ensure_exists(&exe)?;
