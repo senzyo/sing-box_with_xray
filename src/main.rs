@@ -65,7 +65,6 @@ struct AppState {
     /// 可执行文件所在目录，所有相对路径以此为基准。
     exe_dir: PathBuf,
     /// 菜单项 ID → 配置文件路径的映射，用于配置切换。
-    config_actions: HashMap<u16, ConfigAction>,
     sing_box_version: Option<String>,
     xray_version: Option<String>,
     /// GDI 位图句柄：绿色（运行中）、黄色（未运行）、红色（未安装）。
@@ -235,7 +234,6 @@ fn run() -> Result<(), AppError> {
 
     APP.set(Mutex::new(AppState {
         exe_dir: exe_dir.clone(),
-        config_actions: HashMap::new(),
         sing_box_version: None,
         xray_version: None,
         icon_green: 0,
@@ -298,7 +296,7 @@ fn run() -> Result<(), AppError> {
 /// 重启/终止/更新操作在独立线程中执行（避免阻塞 UI 线程），每个线程
 /// 独立初始化 COM。切换配置操作在当前线程同步执行。退出操作终止所有
 /// 进程并销毁窗口。
-fn execute_menu_command(hwnd: isize, id: u16) {
+fn execute_menu_command(hwnd: isize, id: u16, config_actions: &HashMap<u16, ConfigAction>) {
     let result = match id {
         tray::ID_RESTART_SING
         | tray::ID_RESTART_XRAY
@@ -450,7 +448,7 @@ fn execute_menu_command(hwnd: isize, id: u16) {
             }
             Ok(())
         }
-        _ => run_config_action(id),
+        _ => run_config_action(id, config_actions),
     };
 
     if let Err(err) = result {
@@ -633,13 +631,8 @@ fn start_xray_at(exe_dir: &Path) -> Result<(), AppError> {
 }
 
 /// 执行配置切换操作：将选中的配置文件复制到活跃配置路径并重启对应服务。
-fn run_config_action(id: u16) -> Result<(), AppError> {
-    let action = {
-        let app = app_state().ok_or(AppError::Msg("应用状态不可用".into()))?;
-        app.config_actions.get(&id).cloned()
-    };
-
-    let Some(action) = action else {
+fn run_config_action(id: u16, config_actions: &HashMap<u16, ConfigAction>) -> Result<(), AppError> {
+    let Some(action) = config_actions.get(&id).cloned() else {
         return Ok(());
     };
 

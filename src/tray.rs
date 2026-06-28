@@ -3,6 +3,7 @@
 //! 负责创建隐藏窗口、注册托盘图标、构建右键弹出菜单（重启/终止/更新/切换配置/退出），
 //! 处理鼠标消息并将菜单事件分发给 `main::execute_menu_command`。
 
+use std::collections::HashMap;
 use std::mem::size_of;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
@@ -25,7 +26,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::core::{HSTRING, PCWSTR};
 
-use crate::{AppError, AppState, ConfigAction, ConfigKind, ProcessState};
+use crate::{AppError, ConfigAction, ConfigKind, ProcessState};
 use tracing::warn;
 
 /// 托盘图标的自定义消息 ID，当托盘收到鼠标事件时通过此消息通知窗口。
@@ -236,9 +237,9 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
             WM_TRAY_ICON => {
                 let event = lparam.0 as u32;
                 if event == WM_LBUTTONUP || event == WM_RBUTTONUP {
-                    let selected = show_tray_menu(hwnd);
+                    let (selected, config_actions) = show_tray_menu(hwnd);
                     if selected != 0 {
-                        crate::execute_menu_command(hwnd.0 as isize, selected);
+                        crate::execute_menu_command(hwnd.0 as isize, selected, &config_actions);
                     }
                 }
                 LRESULT(0)
@@ -289,26 +290,35 @@ unsafe fn remove_tray_icon(hwnd: HWND) {
     }
 }
 
-/// 构建并显示右键弹出菜单，返回用户选择的菜单项 ID（0 表示取消）。
-unsafe fn show_tray_menu(hwnd: HWND) -> u16 {
+/// 构建并显示右键弹出菜单，返回用户选择的菜单项 ID 和配置项映射。
+///
+/// Mutex 仅在读取状态时持有，TrackPopupMenu 在锁外执行，
+/// 避免模态消息循环重入窗口过程时因 Mutex 不可重入导致死锁。
+unsafe fn show_tray_menu(hwnd: HWND) -> (u16, HashMap<u16, ConfigAction>) {
     unsafe {
-        let mut app = match crate::app_state_mut() {
-            Some(app) => app,
-            None => return 0,
+        let (sing_state, xray_state, exe_dir, icon_green, icon_yellow, icon_red) = {
+            let app = match crate::app_state() {
+                Some(app) => app,
+                None => return (0, HashMap::new()),
+            };
+            (
+                crate::sing_box_state(&app),
+                crate::xray_state(&app),
+                app.exe_dir.clone(),
+                app.icon_green,
+                app.icon_yellow,
+                app.icon_red,
+            )
         };
 
         let Ok(menu) = CreatePopupMenu() else {
-            return 0;
+            return (0, HashMap::new());
         };
 
-        let sing_state = crate::sing_box_state(&app);
-        let xray_state = crate::xray_state(&app);
-        let exe_dir = app.exe_dir.clone();
-
         let status_hbmp = |s: ProcessState| match s {
-            ProcessState::Running => app.icon_green,
-            ProcessState::NotRunning => app.icon_yellow,
-            ProcessState::NotInstalled => app.icon_red,
+            ProcessState::Running => icon_green,
+            ProcessState::NotRunning => icon_yellow,
+            ProcessState::NotInstalled => icon_red,
         };
         let status_label = |s: ProcessState, name: &str| match s {
             ProcessState::Running => format!("{name} 正在运行"),
@@ -338,16 +348,16 @@ unsafe fn show_tray_menu(hwnd: HWND) -> u16 {
         append_item(update_menu, ID_UPDATE_SING, "更新 sing-box");
         append_item(update_menu, ID_UPDATE_XRAY, "更新 xray");
 
-        app.config_actions.clear();
+        let mut config_actions = HashMap::new();
         append_config_items(
-            &mut app,
+            &mut config_actions,
             sing_menu,
             ConfigKind::SingBox,
             ID_SING_CONFIG_BASE,
             &[exe_dir.join("configs").join("sing-box")],
         );
         append_config_items(
-            &mut app,
+            &mut config_actions,
             xray_menu,
             ConfigKind::Xray,
             ID_XRAY_CONFIG_BASE,
@@ -375,12 +385,11 @@ unsafe fn show_tray_menu(hwnd: HWND) -> u16 {
             hwnd,
             None,
         );
-        // 必须发送 WM_NULL 以正确结束菜单交互，否则点击外部时菜单可能卡住
         let _ = PostMessageW(Some(hwnd), WM_NULL, WPARAM(0), LPARAM(0));
 
         let _ = DestroyMenu(menu);
 
-        selected.0 as u16
+        (selected.0 as u16, config_actions)
     }
 }
 
@@ -439,7 +448,7 @@ unsafe fn append_submenu(menu: HMENU, submenu: HMENU, label: &str) {
 }
 
 /// 扫描配置目录并将每个 .json 文件添加为菜单项，最多 900 项。
-unsafe fn append_config_items(app: &mut AppState, menu: HMENU, kind: ConfigKind, base_id: u16, dirs: &[PathBuf]) {
+unsafe fn append_config_items(map: &mut HashMap<u16, ConfigAction>, menu: HMENU, kind: ConfigKind, base_id: u16, dirs: &[PathBuf]) {
     unsafe {
         let mut added = 0;
 
@@ -454,7 +463,7 @@ unsafe fn append_config_items(app: &mut AppState, menu: HMENU, kind: ConfigKind,
                 .unwrap_or("未命名配置")
                 .to_string();
             append_item(menu, id, &label);
-            app.config_actions.insert(id, ConfigAction { kind, path });
+            map.insert(id, ConfigAction { kind, path });
             added += 1;
         }
 
