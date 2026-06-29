@@ -56,9 +56,9 @@ pub struct AppState {
 /// 全局应用状态，通过 OnceLock + Mutex 实现线程安全的单例。
 pub static APP: OnceLock<Mutex<AppState>> = OnceLock::new();
 
-/// 获取只读应用状态。
+/// 获取只读应用状态。Mutex 中毒时恢复并继续使用。
 pub fn app_state() -> Option<std::sync::MutexGuard<'static, AppState>> {
-    APP.get()?.lock().ok()
+    Some(APP.get()?.lock().unwrap_or_else(|e| e.into_inner()))
 }
 
 /// 获取可变应用状态。语义与 `app_state()` 相同，

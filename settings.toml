@@ -27,7 +27,9 @@ level = "debug"
 [download]
 # 下载更新时的最大重试次数
 # 网络不稳定时可适当增大
+# 上限为 10
 max_retries = 3
 
 # 每次重试之间的等待时间（秒）
+# 上限为 30
 retry_delay_secs = 2

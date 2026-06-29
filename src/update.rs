@@ -453,6 +453,11 @@ fn backup_and_extract(zip_path: &Path, core_dir: &Path, strip_prefix: Option<&st
 
         let out_path = core_dir.join(&rel_path);
 
+        if !out_path.starts_with(core_dir) {
+            warn!("zip 条目路径越界，跳过: {}", rel_path);
+            continue;
+        }
+
         if entry.is_dir() {
             fs::create_dir_all(&out_path).map_err(|e| AppError::Msg(format!("创建目录失败: {e}")))?;
         } else {

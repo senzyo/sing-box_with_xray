@@ -154,11 +154,17 @@ impl Settings {
         if self.download.max_retries == 0 {
             push_warning("max_retries 不能为 0, 回退到默认值 3".to_string());
             self.download.max_retries = 3;
+        } else if self.download.max_retries > 10 {
+            push_warning("max_retries 超出上限 10, 已自动限制".to_string());
+            self.download.max_retries = 10;
         }
 
         if self.download.retry_delay_secs == 0 {
             push_warning("retry_delay_secs 不能为 0, 回退到默认值 2".to_string());
             self.download.retry_delay_secs = 2;
+        } else if self.download.retry_delay_secs > 30 {
+            push_warning("retry_delay_secs 超出上限 30, 已自动限制".to_string());
+            self.download.retry_delay_secs = 30;
         }
 
         if self.gh_proxy.enabled && self.gh_proxy.url.is_empty() {
