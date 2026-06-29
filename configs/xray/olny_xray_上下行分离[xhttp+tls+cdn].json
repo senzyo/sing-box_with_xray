@@ -2,7 +2,7 @@
   "log": {
     "access": "none",
     "error": "none",
-    "loglevel": "none",
+    "loglevel": "warning",
     "dnsLog": true,
     "maskAddress": ""
   },
