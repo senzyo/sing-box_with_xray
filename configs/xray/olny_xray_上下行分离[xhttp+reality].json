@@ -12,6 +12,7 @@
       "dns.alidns.com": ["223.5.5.5", "223.6.6.6"]
     },
     "servers": [
+      "https://8.8.8.8/dns-query",
       {
         "address": "https+local://dns.alidns.com/dns-query",
         "domains": [
@@ -39,10 +40,8 @@
       {
         "address": "https+local://dns.alidns.com/dns-query",
         "domains": ["geosite:cn"],
-        "expectIPs": ["geoip:cn"],
         "skipFallback": true
-      },
-      "https://8.8.8.8/dns-query"
+      }
     ],
     "tag": "dns-module",
     "queryStrategy": "UseIPv4",
@@ -59,6 +58,12 @@
         "dns": ["1.1.1.1", "1.0.0.1"],
         "autoSystemRoutingTable": ["0.0.0.0/0"],
         "autoOutboundsInterface": "auto"
+      },
+      "sniffing": {
+        "enabled": true,
+        "destOverride": ["http", "tls"],
+        "metadataOnly": false,
+        "routeOnly": true
       }
     }
   ],
@@ -137,7 +142,7 @@
     }
   ],
   "routing": {
-    "domainStrategy": "IPIfNonMatch",
+    "domainStrategy": "AsIs",
     "rules": [
       {
         "inboundTag": ["in-tun"],
@@ -163,7 +168,23 @@
       },
       {
         "port": "853",
+        "protocol": ["tls"],
         "outboundTag": "out-block"
+      },
+      {
+        "domain": [
+          "cf.godns.cc",
+          "cf.tencentapp.cn",
+          "cfyx.tencentapp.cn",
+          "1749991941.bilibiliapp.cn",
+          "freeyx.cloudflare88.eu.org",
+          "cfcn-a-proctusa.chinabaidu.pp.ua",
+          "dnew.cc",
+          "cloudflare.182682.xyz",
+          "baota.me",
+          "cloudflare-ip.mofashi.ltd"
+        ],
+        "outboundTag": "out-direct"
       },
       {
         "protocol": ["bittorrent"],
