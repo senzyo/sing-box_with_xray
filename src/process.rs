@@ -63,7 +63,7 @@ pub fn start_sing_box_at(exe_dir: &Path) -> Result<(), AppError> {
 
     state::ensure_exists(&exe)?;
     state::ensure_exists(&config)?;
-    randomize_tun_name(&config)?;
+    randomize_sing_box_tun_name(&config)?;
 
     info!("启动 sing-box");
     let mut child = hidden_command(exe)
@@ -84,13 +84,16 @@ pub fn start_sing_box_at(exe_dir: &Path) -> Result<(), AppError> {
     Ok(())
 }
 
-/// 启动 xray 子进程，stderr 输出重定向到日志。
+/// 启动 xray 子进程。启动前清理孤立 WinTUN 设备并随机化 TUN 接口名。
 pub fn start_xray_at(exe_dir: &Path) -> Result<(), AppError> {
+    cleanup_orphaned_wintun();
+
     let exe = exe_dir.join("xray_core").join("xray.exe");
     let config = exe_dir.join("configs").join("xray.json");
 
     state::ensure_exists(&exe)?;
     state::ensure_exists(&config)?;
+    randomize_xray_tun_name(&config)?;
 
     info!("启动 xray");
     let mut child = hidden_command(exe)
@@ -197,7 +200,7 @@ pub fn restart_xray_at(exe_dir: &Path) -> Result<(), AppError> {
 /// 使用字符串替换而非 JSON 序列化来保留原始配置的格式和注释。
 /// 如果配置中没有 type=tun 的 inbound，静默跳过（用户可能不使用 TUN 功能）。
 /// 如果 tun inbound 缺少 interface_name 字段，自动写入随机化后的值。
-fn randomize_tun_name(config_path: &Path) -> Result<(), AppError> {
+fn randomize_sing_box_tun_name(config_path: &Path) -> Result<(), AppError> {
     let text = fs::read_to_string(config_path).map_err(|e| AppError::Msg(format!("读取 sing-box 配置失败: {e}")))?;
     let json: Value = serde_json::from_str(&text).map_err(|e| AppError::Msg(format!("解析 sing-box 配置失败: {e}")))?;
     let new_name = random_hex_name();
@@ -241,6 +244,61 @@ fn randomize_tun_name(config_path: &Path) -> Result<(), AppError> {
     let mut new_text = text;
     new_text.insert_str(line_end + 1, &insert);
     fs::write(config_path, new_text).map_err(|e| AppError::Msg(format!("写入 sing-box 配置失败: {e}")))
+}
+
+/// 随机化 xray 配置中的 TUN 接口名。
+///
+/// xray 的 TUN inbound 使用 `"protocol": "tun"` 标识，接口名位于
+/// `settings.name` 字段（如 `"name": "xray0"`）。逻辑与
+/// `randomize_sing_box_tun_name` 对称：字符串替换保留原始格式。
+fn randomize_xray_tun_name(config_path: &Path) -> Result<(), AppError> {
+    let text = fs::read_to_string(config_path).map_err(|e| AppError::Msg(format!("读取 xray 配置失败: {e}")))?;
+    let json: Value = serde_json::from_str(&text).map_err(|e| AppError::Msg(format!("解析 xray 配置失败: {e}")))?;
+    let new_name = random_hex_name();
+
+    // 找 tun inbound，找不到直接跳过
+    let tun_inbound = json
+        .get("inbounds")
+        .and_then(Value::as_array)
+        .and_then(|inbounds| {
+            inbounds.iter().find(|inbound| inbound.get("protocol").and_then(Value::as_str) == Some("tun"))
+        });
+
+    let tun_inbound = match tun_inbound {
+        Some(inbound) => inbound,
+        None => {
+            debug!("未发现 protocol=tun 的 inbound，跳过 TUN 接口名随机化");
+            return Ok(());
+        }
+    };
+
+    // 有 settings.name → 替换
+    if let Some(old_name) = tun_inbound
+        .get("settings")
+        .and_then(|s| s.get("name"))
+        .and_then(Value::as_str)
+    {
+        if old_name == new_name {
+            return Ok(());
+        }
+        debug!("随机化 xray TUN 接口名: {old_name} -> {new_name}");
+        let old_pattern = format!("\"name\": \"{}\"", old_name);
+        let new_pattern = format!("\"name\": \"{}\"", new_name);
+        let new_text = text.replacen(&old_pattern, &new_pattern, 1);
+        return fs::write(config_path, new_text).map_err(|e| AppError::Msg(format!("写入 xray 配置失败: {e}")));
+    }
+
+    // 无 settings.name → 在 "settings": { 行后插入
+    debug!("写入 xray TUN 接口名: {new_name}");
+    let settings_pattern = "\"settings\": {";
+    let pos = text.find(settings_pattern).ok_or(AppError::Msg("未在 xray.json 中找到 tun inbound 的 settings 块".into()))?;
+    let line_end = text[pos..].find('\n').map(|p| pos + p).unwrap_or(text.len());
+    let line_start = text[..pos].rfind('\n').map(|p| p + 1).unwrap_or(0);
+    let indent = &text[line_start..pos];
+    let insert = format!("{indent}  \"name\": \"{new_name}\",\n");
+    let mut new_text = text;
+    new_text.insert_str(line_end + 1, &insert);
+    fs::write(config_path, new_text).map_err(|e| AppError::Msg(format!("写入 xray 配置失败: {e}")))
 }
 
 /// 生成 6 位随机十六进制字符串，用作 TUN 接口名。

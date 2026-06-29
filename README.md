@@ -26,14 +26,7 @@ flowchart LR
 
 当然, 你可以根据自身需求仅运行其中一个核心, 比如使用 `configs\xray\olny_xray_上行[xhttp+reality]下行[xhttp+tls+cdn].json`, 这取决于你自己怎样修改配置文件。
 
-## 功能
-
-- **重启** — sing-box / xray / 全部
-- **终止** — sing-box / xray / 全部
-- **更新** — sing-box / xray / 全部 (通过 GitHub Releases API 自动检测新版本, 支持 CDN 代理和 SHA256 校验)
-- **切换配置** — sing-box / xray (自动扫描 `configs/sing-box/` 和 `configs/xray/` 下的 `.json` 文件)
-
-重启 sing-box 时, 程序会自动随机化 TUN 接口名, 避免残留网卡导致冲突。
+![运行截图](main.png)
 
 ## 目录结构
 

@@ -338,17 +338,17 @@ unsafe fn show_tray_menu(hwnd: HWND) -> (u16, HashMap<u16, ConfigAction>) {
         let sing_menu = new_submenu();
         let xray_menu = new_submenu();
 
-        append_item(restart_menu, ID_RESTART_ALL, "重启 sing-box 和 xray");
         append_item(restart_menu, ID_RESTART_SING, "重启 sing-box");
         append_item(restart_menu, ID_RESTART_XRAY, "重启 xray");
+        append_item(restart_menu, ID_RESTART_ALL, "重启 sing-box 和 xray");
 
-        append_item(stop_menu, ID_STOP_ALL, "终止 sing-box 和 xray");
         append_item(stop_menu, ID_STOP_SING, "终止 sing-box");
         append_item(stop_menu, ID_STOP_XRAY, "终止 xray");
+        append_item(stop_menu, ID_STOP_ALL, "终止 sing-box 和 xray");
 
-        append_item(update_menu, ID_UPDATE_ALL, "更新 sing-box 和 xray");
         append_item(update_menu, ID_UPDATE_SING, "更新 sing-box");
         append_item(update_menu, ID_UPDATE_XRAY, "更新 xray");
+        append_item(update_menu, ID_UPDATE_ALL, "更新 sing-box 和 xray");
 
         let mut config_actions = HashMap::new();
         append_config_items(
