@@ -6,19 +6,59 @@
     "dnsLog": true,
     "maskAddress": ""
   },
+  "dns": {
+    "hosts": {
+      "domain:googleapis.cn": ["googleapis.com"],
+      "dns.alidns.com": ["223.5.5.5", "223.6.6.6"]
+    },
+    "servers": [
+      {
+        "address": "https+local://dns.alidns.com/dns-query",
+        "domains": [
+          "geosite:private",
+          "geosite:category-games@cn",
+          "geosite:kaspersky",
+          "domain:cf.godns.cc",
+          "domain:cf.tencentapp.cn",
+          "domain:cfyx.tencentapp.cn",
+          "domain:1749991941.bilibiliapp.cn",
+          "domain:freeyx.cloudflare88.eu.org",
+          "domain:cfcn-a-proctusa.chinabaidu.pp.ua",
+          "domain:dnew.cc",
+          "domain:cloudflare.182682.xyz",
+          "domain:baota.me",
+          "domain:cloudflare-ip.mofashi.ltd"
+        ],
+        "skipFallback": true
+      },
+      {
+        "address": "https://8.8.8.8/dns-query",
+        "domains": ["geosite:geolocation-!cn"],
+        "skipFallback": true
+      },
+      {
+        "address": "https+local://dns.alidns.com/dns-query",
+        "domains": ["geosite:cn"],
+        "expectIPs": ["geoip:cn"],
+        "skipFallback": true
+      },
+      "https://8.8.8.8/dns-query"
+    ],
+    "tag": "dns-module",
+    "queryStrategy": "UseIPv4",
+    "useSystemHosts": false
+  },
   "inbounds": [
     {
-      "tag": "in-socks",
-      "listen": "127.0.0.1",
-      "port": 10808,
-      "protocol": "mixed",
+      "tag": "in-tun",
+      "protocol": "tun",
       "settings": {
-        "auth": "noauth",
-        "udp": true,
-        "allowTransparent": false
-      },
-      "sniffing": {
-        "enabled": false
+        "name": "xray0",
+        "mtu": 1500,
+        "gateway": ["10.0.0.1/16"],
+        "dns": ["1.1.1.1", "1.0.0.1"],
+        "autoSystemRoutingTable": ["0.0.0.0/0"],
+        "autoOutboundsInterface": "auto"
       }
     }
   ],
@@ -75,13 +115,75 @@
           }
         }
       }
+    },
+    {
+      "tag": "out-direct",
+      "protocol": "freedom",
+      "settings": {
+        "domainStrategy": "UseIPv4"
+      }
+    },
+    {
+      "tag": "out-block",
+      "protocol": "blackhole"
+    },
+    {
+      "tag": "out-dns",
+      "protocol": "dns"
     }
   ],
   "routing": {
+    "domainStrategy": "IPIfNonMatch",
     "rules": [
       {
-        "inboundTag": "in-socks",
+        "inboundTag": ["in-tun"],
+        "port": "53",
+        "outboundTag": "out-dns"
+      },
+      {
+        "inboundTag": ["dns-module"],
         "outboundTag": "out-proxy"
+      },
+      {
+        "domain": ["geosite:private"],
+        "outboundTag": "out-direct"
+      },
+      {
+        "ip": ["ext:geoip-only-cn-private.dat:private"],
+        "outboundTag": "out-direct"
+      },
+      {
+        "network": "udp",
+        "port": "443",
+        "outboundTag": "out-block"
+      },
+      {
+        "port": "853",
+        "outboundTag": "out-block"
+      },
+      {
+        "protocol": ["bittorrent"],
+        "outboundTag": "out-direct"
+      },
+      {
+        "domain": ["geosite:category-games@cn"],
+        "outboundTag": "out-direct"
+      },
+      {
+        "domain": ["geosite:kaspersky"],
+        "outboundTag": "out-direct"
+      },
+      {
+        "domain": ["geosite:geolocation-!cn"],
+        "outboundTag": "out-proxy"
+      },
+      {
+        "domain": ["geosite:cn"],
+        "outboundTag": "out-direct"
+      },
+      {
+        "ip": ["ext:geoip-only-cn-private.dat:cn"],
+        "outboundTag": "out-direct"
       }
     ]
   }
