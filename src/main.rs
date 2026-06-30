@@ -240,6 +240,7 @@ fn run() -> Result<(), AppError> {
         app_settings.download.max_retries,
         app_settings.download.retry_delay_secs,
     );
+    process::cleanup_network_registry();
     toast::setup(&exe_path).map_err(|e| AppError::Msg(format!("初始化 Toast 通知失败: {e}")))?;
 
     let icon_green = unsafe { tray::load_icon_bitmap(&exe_dir, "green_circle.ico") };

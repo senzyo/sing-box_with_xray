@@ -1,7 +1,7 @@
 //! 子进程生命周期管理、TUN 接口配置与 DNS 缓存刷新。
 //!
-//! 负责 sing-box / xray 子进程的启停控制、TUN 接口名随机化、
-//! 孤立 WinTUN 设备节点清理、以及 DNS 缓存刷新。
+//! 负责 sing-box / xray 子进程的启停控制、TUN 接口名随机化（`tun-` 前缀）、
+//! 孤立 WinTUN 设备节点清理、网络注册表清理、以及 DNS 缓存刷新。
 
 use std::ffi::OsStr;
 use std::fs;
@@ -54,10 +54,8 @@ fn forward_stderr(child: &mut std::process::Child, label: &str) {
     }
 }
 
-/// 启动 sing-box 子进程。启动前清理孤立 WinTUN 设备并随机化 TUN 接口名。
+/// 启动 sing-box 子进程。启动前随机化 TUN 接口名。
 pub fn start_sing_box_at(exe_dir: &Path) -> Result<(), AppError> {
-    cleanup_orphaned_wintun();
-
     let exe = exe_dir.join("sing-box_core").join("sing-box.exe");
     let config = exe_dir.join("configs").join("sing-box.json");
 
@@ -84,10 +82,8 @@ pub fn start_sing_box_at(exe_dir: &Path) -> Result<(), AppError> {
     Ok(())
 }
 
-/// 启动 xray 子进程。启动前清理孤立 WinTUN 设备并随机化 TUN 接口名。
+/// 启动 xray 子进程。启动前随机化 TUN 接口名。
 pub fn start_xray_at(exe_dir: &Path) -> Result<(), AppError> {
-    cleanup_orphaned_wintun();
-
     let exe = exe_dir.join("xray_core").join("xray.exe");
     let config = exe_dir.join("configs").join("xray.json");
 
@@ -174,17 +170,20 @@ fn kill_processes_by_name(exe_name: &str) {
 
 pub fn restart_all_at(exe_dir: &Path) -> Result<(), AppError> {
     stop_all()?;
+    cleanup_orphaned_wintun();
     start_sing_box_at(exe_dir)?;
     start_xray_at(exe_dir)
 }
 
 pub fn restart_sing_box_at(exe_dir: &Path) -> Result<(), AppError> {
     stop_processes(&["sing-box.exe"])?;
+    cleanup_orphaned_wintun();
     start_sing_box_at(exe_dir)
 }
 
 pub fn restart_xray_at(exe_dir: &Path) -> Result<(), AppError> {
     stop_processes(&["xray.exe"])?;
+    cleanup_orphaned_wintun();
     start_xray_at(exe_dir)
 }
 
@@ -195,7 +194,7 @@ pub fn restart_xray_at(exe_dir: &Path) -> Result<(), AppError> {
 /// 随机化 sing-box 配置中的 TUN 接口名。
 ///
 /// sing-box TUN 适配器在 Windows 上以固定名称注册，重启时如果旧适配器
-/// 未完全释放会导致冲突。通过每次启动时生成随机 6 位十六进制名称来避免。
+/// 未完全释放会导致冲突。通过每次启动时生成带 `tun-` 前缀的随机名称来避免。
 ///
 /// 使用字符串替换而非 JSON 序列化来保留原始配置的格式和注释。
 /// 如果配置中没有 type=tun 的 inbound，静默跳过（用户可能不使用 TUN 功能）。
@@ -203,7 +202,7 @@ pub fn restart_xray_at(exe_dir: &Path) -> Result<(), AppError> {
 fn randomize_sing_box_tun_name(config_path: &Path) -> Result<(), AppError> {
     let text = fs::read_to_string(config_path).map_err(|e| AppError::Msg(format!("读取 sing-box 配置失败: {e}")))?;
     let json: Value = serde_json::from_str(&text).map_err(|e| AppError::Msg(format!("解析 sing-box 配置失败: {e}")))?;
-    let new_name = random_hex_name();
+    let new_name = random_tun_name();
 
     // 找 tun inbound，找不到直接跳过
     let tun_inbound = json
@@ -254,7 +253,7 @@ fn randomize_sing_box_tun_name(config_path: &Path) -> Result<(), AppError> {
 fn randomize_xray_tun_name(config_path: &Path) -> Result<(), AppError> {
     let text = fs::read_to_string(config_path).map_err(|e| AppError::Msg(format!("读取 xray 配置失败: {e}")))?;
     let json: Value = serde_json::from_str(&text).map_err(|e| AppError::Msg(format!("解析 xray 配置失败: {e}")))?;
-    let new_name = random_hex_name();
+    let new_name = random_tun_name();
 
     // 找 tun inbound，找不到直接跳过
     let tun_inbound = json
@@ -301,9 +300,12 @@ fn randomize_xray_tun_name(config_path: &Path) -> Result<(), AppError> {
     fs::write(config_path, new_text).map_err(|e| AppError::Msg(format!("写入 xray 配置失败: {e}")))
 }
 
-/// 生成 6 位随机十六进制字符串，用作 TUN 接口名。
+/// TUN 接口名前缀，用于在注册表中识别本程序创建的网络配置。
+const TUN_PREFIX: &str = "tun-";
+
+/// 生成带 `tun-` 前缀的随机 TUN 接口名（如 `tun-0ad1f0`）。
 /// 使用 RandomState 对时间戳做哈希，每次运行种子不同。
-fn random_hex_name() -> String {
+fn random_tun_name() -> String {
     use std::hash::{BuildHasher, Hasher};
     let seed = std::hash::RandomState::new();
     let mut hasher = seed.build_hasher();
@@ -312,7 +314,61 @@ fn random_hex_name() -> String {
         .map(|d| d.as_nanos())
         .unwrap_or_default();
     hasher.write_u128(nanos);
-    format!("{:06x}", hasher.finish() & 0xFF_FFFF)
+    format!("{TUN_PREFIX}{:06x}", hasher.finish() & 0xFF_FFFF)
+}
+
+/// 清理 Windows 网络配置注册表中 TUN 相关的子项。
+///
+/// 枚举 `NetworkList\Profiles` 和 `NetworkList\Signatures\Unmanaged`
+/// 下的所有子项，删除 `Description` 值以 `tun-` 开头的条目。
+///
+/// 需要管理员权限；若权限不足会记录警告但不阻断启动流程。
+pub fn cleanup_network_registry() {
+    const PROFILES: &str = r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\NetworkList\Profiles";
+    const SIGNATURES: &str = r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\NetworkList\Signatures\Unmanaged";
+
+    debug!("清理 TUN 相关网络注册表项...");
+    clean_tun_entries(PROFILES);
+    clean_tun_entries(SIGNATURES);
+}
+
+/// 枚举 `parent_path` 下的所有子项，删除 `Description` 值以 `TUN_PREFIX` 开头的子项。
+fn clean_tun_entries(parent_path: &str) {
+    use windows_registry::LOCAL_MACHINE;
+
+    let parent = match LOCAL_MACHINE.open(parent_path) {
+        Ok(k) => k,
+        Err(e) => {
+            warn!("打开注册表键失败: {parent_path}: {e}");
+            return;
+        }
+    };
+
+    let subkeys: Vec<String> = match parent.keys() {
+        Ok(iter) => iter.collect(),
+        Err(e) => {
+            warn!("枚举子项失败: {parent_path}: {e}");
+            return;
+        }
+    };
+
+    for name in subkeys {
+        let subkey = match parent.open(&name) {
+            Ok(k) => k,
+            Err(_) => continue,
+        };
+        let desc = match subkey.get_string("Description") {
+            Ok(d) => d,
+            Err(_) => continue,
+        };
+        if desc.starts_with(TUN_PREFIX) {
+            let full = format!("{parent_path}\\{name}");
+            match LOCAL_MACHINE.remove_tree(&full) {
+                Ok(()) => debug!("已删除 TUN 注册表项: {full} (Description={desc})"),
+                Err(e) => warn!("删除注册表项失败: {full}: {e}"),
+            }
+        }
+    }
 }
 
 /// 清理孤立或异常的 WinTUN 设备节点。
@@ -417,11 +473,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_random_hex_name() {
-        let name1 = random_hex_name();
-        let name2 = random_hex_name();
-        assert_eq!(name1.len(), 6);
-        assert!(name1.chars().all(|c| c.is_ascii_hexdigit()));
+    fn test_random_tun_name() {
+        let name1 = random_tun_name();
+        let name2 = random_tun_name();
+        assert!(name1.starts_with(TUN_PREFIX));
+        assert_eq!(name1.len(), TUN_PREFIX.len() + 6);
+        let hex_part = &name1[TUN_PREFIX.len()..];
+        assert!(hex_part.chars().all(|c| c.is_ascii_hexdigit()));
         assert_ne!(name1, name2);
     }
 }
