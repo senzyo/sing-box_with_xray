@@ -28,6 +28,12 @@ flowchart LR
 
 ![运行截图](screenshots/main.png)
 
+### 特性功能
+
+- 启动 sing-box 或 Xray 的 TUN 模式前, 随机化 TUN 接口名称, 避免与残留 TUN 设备冲突。
+- 清理注册表网络设备名称列表中无用的 TUN 设备。
+- 为 Xray 的 TUN 模式劫持物理网卡的 DNS 服务器为本地回环地址, 有效防止 DNS 泄露。sing-box 的 TUN 模式支持严格路由, 所以不用额外设置。
+
 ## 目录结构
 
 ```

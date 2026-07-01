@@ -5,6 +5,7 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod dns;
 mod error;
 mod process;
 mod settings;
@@ -241,6 +242,7 @@ fn run() -> Result<(), AppError> {
         app_settings.download.retry_delay_secs,
     );
     process::cleanup_network_registry();
+    dns::restore_dns_to_dhcp();
     toast::setup(&exe_path).map_err(|e| AppError::Msg(format!("初始化 Toast 通知失败: {e}")))?;
 
     let icon_green = unsafe { tray::load_icon_bitmap(&exe_dir, "green_circle.ico") };

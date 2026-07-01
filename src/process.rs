@@ -21,6 +21,7 @@ use windows_sys::Win32::Devices::DeviceAndDriverInstallation::{
     DN_HAS_PROBLEM, DN_STARTED,
 };
 
+use crate::dns;
 use crate::error::AppError;
 use crate::state::{self};
 
@@ -89,7 +90,27 @@ pub fn start_xray_at(exe_dir: &Path) -> Result<(), AppError> {
 
     state::ensure_exists(&exe)?;
     state::ensure_exists(&config)?;
-    randomize_xray_tun_name(&config)?;
+
+    // 一次性读取并解析配置，用于 TUN 检测和接口名随机化
+    let text = fs::read_to_string(&config).map_err(|e| AppError::Msg(format!("读取 xray 配置失败: {e}")))?;
+    let json: Value = serde_json::from_str(&text).map_err(|e| AppError::Msg(format!("解析 xray 配置失败: {e}")))?;
+
+    // 检测是否有 TUN inbound
+    let has_tun = json
+        .get("inbounds")
+        .and_then(Value::as_array)
+        .map(|inbounds| {
+            inbounds
+                .iter()
+                .any(|inbound| inbound.get("protocol").and_then(Value::as_str) == Some("tun"))
+        })
+        .unwrap_or(false);
+
+    if has_tun {
+        debug!("xray 配置包含 TUN 模式");
+        randomize_xray_tun_name(&config, &text, &json)?;
+        dns::set_physical_dns_to_local();
+    }
 
     info!("启动 xray");
     let mut child = hidden_command(exe)
@@ -146,6 +167,10 @@ pub fn stop_processes(processes: &[&str]) -> Result<(), AppError> {
     for process in processes {
         info!("终止进程: {process}");
         kill_processes_by_name(process);
+    }
+    // 如果停止的进程包含 xray，恢复物理网卡 DNS
+    if processes.contains(&"xray.exe") {
+        dns::restore_dns_to_dhcp();
     }
     flush_dns();
     Ok(())
@@ -250,26 +275,19 @@ fn randomize_sing_box_tun_name(config_path: &Path) -> Result<(), AppError> {
 /// xray 的 TUN inbound 使用 `"protocol": "tun"` 标识，接口名位于
 /// `settings.name` 字段（如 `"name": "xray0"`）。逻辑与
 /// `randomize_sing_box_tun_name` 对称：字符串替换保留原始格式。
-fn randomize_xray_tun_name(config_path: &Path) -> Result<(), AppError> {
-    let text = fs::read_to_string(config_path).map_err(|e| AppError::Msg(format!("读取 xray 配置失败: {e}")))?;
-    let json: Value = serde_json::from_str(&text).map_err(|e| AppError::Msg(format!("解析 xray 配置失败: {e}")))?;
+///
+/// 调用者负责保证配置中存在 TUN inbound，并传入已读取的 `text` 和已解析的 `json`。
+fn randomize_xray_tun_name(config_path: &Path, text: &str, json: &Value) -> Result<(), AppError> {
     let new_name = random_tun_name();
 
-    // 找 tun inbound，找不到直接跳过
+    // 定位 TUN inbound（调用者已保证 TUN 存在）
     let tun_inbound = json
         .get("inbounds")
         .and_then(Value::as_array)
         .and_then(|inbounds| {
             inbounds.iter().find(|inbound| inbound.get("protocol").and_then(Value::as_str) == Some("tun"))
-        });
-
-    let tun_inbound = match tun_inbound {
-        Some(inbound) => inbound,
-        None => {
-            debug!("未发现 protocol=tun 的 inbound，跳过 TUN 接口名随机化");
-            return Ok(());
-        }
-    };
+        })
+        .expect("xray 配置中应存在 TUN inbound");
 
     // 有 settings.name → 替换
     if let Some(old_name) = tun_inbound
@@ -295,7 +313,7 @@ fn randomize_xray_tun_name(config_path: &Path) -> Result<(), AppError> {
     let line_start = text[..pos].rfind('\n').map(|p| p + 1).unwrap_or(0);
     let indent = &text[line_start..pos];
     let insert = format!("{indent}  \"name\": \"{new_name}\",\n");
-    let mut new_text = text;
+    let mut new_text = text.to_string();
     new_text.insert_str(line_end + 1, &insert);
     fs::write(config_path, new_text).map_err(|e| AppError::Msg(format!("写入 xray 配置失败: {e}")))
 }
