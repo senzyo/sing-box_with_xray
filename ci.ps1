@@ -51,7 +51,7 @@ function Get-Version {
     if (-not $?) { Fail "cargo metadata 失败" }
     $meta | ConvertFrom-Json |
         Select-Object -ExpandProperty packages |
-        Where-Object name -eq "sing-box_with_xray" |
+        Where-Object name -eq "ladder" |
         Select-Object -ExpandProperty version
 }
 
@@ -79,10 +79,10 @@ function Package-Arch {
         [string]$Version
     )
 
-    $exe = Join-Path $TargetDir "sing-box_with_xray.exe"
+    $exe = Join-Path $TargetDir "ladder.exe"
     if (-not (Test-Path $exe)) { Fail "$Arch 构建产物不存在: $exe" }
 
-    $name = "sing-box_with_xray-$Arch-v$Version"
+    $name = "ladder-$Arch-v$Version"
     $outDir = Join-Path $DistDir $name
     $zipPath = Join-Path $DistDir "$name.zip"
 
@@ -109,7 +109,7 @@ function Package-Arch {
 # ═══════════════════════════════════════════════
 
 $version = Get-Version
-Info "sing-box_with_xray v$version"
+Info "ladder v$version"
 
 # ── 清理 dist/ ──
 if (Test-Path $DistDir) {

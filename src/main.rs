@@ -217,7 +217,7 @@ fn run() -> Result<(), AppError> {
             .0 as isize;
         let hwnd = tray::create_window(h_instance)?;
         tray::add_icon(hwnd, h_instance, &exe_dir)?;
-        tray::set_tooltip("sing-box with xray");
+        tray::set_tooltip("ladder");
         tray::run_message_loop();
     }
 

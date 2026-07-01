@@ -17,8 +17,8 @@ use windows::core::{HSTRING, Interface};
 
 use crate::error::AppError;
 
-const AUMID: &str = "SingBoxWithXray";
-const SHORTCUT_NAME: &str = "sing-box_with_xray";
+const AUMID: &str = "Ladder";
+const SHORTCUT_NAME: &str = "ladder";
 
 static ICON_URI: OnceLock<String> = OnceLock::new();
 

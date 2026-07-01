@@ -28,7 +28,7 @@ jobs:
           $ver = cargo metadata --no-deps --format-version 1 2>$null |
             ConvertFrom-Json |
             Select-Object -ExpandProperty packages |
-            Where-Object name -eq "sing-box_with_xray" |
+            Where-Object name -eq "ladder" |
             Select-Object -ExpandProperty version
           echo "version=$ver" >> $env:GITHUB_OUTPUT
 
@@ -65,9 +65,9 @@ jobs:
         shell: pwsh
         run: |
           $ver = "${{ steps.version.outputs.version }}"
-          $dir = "sing-box_with_xray-amd64-v$ver"
+          $dir = "ladder-amd64-v$ver"
           New-Item -ItemType Directory $dir
-          Copy-Item target\release\sing-box_with_xray.exe $dir\
+          Copy-Item target\release\ladder.exe $dir\
           Copy-Item target\release\settings.json $dir\
           Copy-Item -Recurse target\release\configs $dir\
           Copy-Item -Recurse target\release\icons $dir\
@@ -80,9 +80,9 @@ jobs:
         shell: pwsh
         run: |
           $ver = "${{ steps.version.outputs.version }}"
-          $dir = "sing-box_with_xray-arm64-v$ver"
+          $dir = "ladder-arm64-v$ver"
           New-Item -ItemType Directory $dir
-          Copy-Item target\aarch64-pc-windows-msvc\release\sing-box_with_xray.exe $dir\
+          Copy-Item target\aarch64-pc-windows-msvc\release\ladder.exe $dir\
           Copy-Item target\aarch64-pc-windows-msvc\release\settings.json $dir\
           Copy-Item -Recurse target\aarch64-pc-windows-msvc\release\configs $dir\
           Copy-Item -Recurse target\aarch64-pc-windows-msvc\release\icons $dir\
@@ -96,5 +96,5 @@ jobs:
         with:
           name: v${{ steps.version.outputs.version }}
           files: |
-            sing-box_with_xray-amd64-v${{ steps.version.outputs.version }}.zip
-            sing-box_with_xray-arm64-v${{ steps.version.outputs.version }}.zip
+            ladder-amd64-v${{ steps.version.outputs.version }}.zip
+            ladder-arm64-v${{ steps.version.outputs.version }}.zip

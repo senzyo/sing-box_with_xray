@@ -1,6 +1,6 @@
 <p align="center">
     <img src="icons/ladder.ico" width="100px" align="center" />
-    <h2 align="center">sing-box_with_xray</h2>
+    <h2 align="center">ladder</h2>
     <p align="center">
         一个极简的、管理 sing-box 和 Xray 核心的 Windows 托盘程序。
     </p>
@@ -12,23 +12,9 @@
 
 main 分支是由 Rust 构建的新方案, 程序运行后常驻系统托盘, 单击程序图标即可打开菜单进行管理。
 
-`configs` 目录下 `with_*.json` 的示例配置是用于双核心搭配的, 比如 `configs\sing-box\with_xray_ipv4_only.json` 和 `configs\xray\with_sing-box_[xhttp+reality].json` 这一组的分工如下:
-
-```mermaid
-flowchart LR
-    A(用户软件) --> B(sing-box)
-    B -->|直连流量| C(目标网站)
-    B -->|需代理流量| D(本地 SOCKS)
-    D --> E(Xray)
-    E --> F(VPS)
-    F --> C
-```
-
-当然, 你可以根据自身需求仅运行其中一个核心, 比如使用 `configs\xray\olny_xray_上行[xhttp+reality]下行[xhttp+tls+cdn].json`, 这取决于你自己怎样修改配置文件。
-
 ![运行截图](screenshots/main.png)
 
-### 特性功能
+### 特性
 
 - 启动 sing-box 或 Xray 的 TUN 模式前, 随机化 TUN 接口名称, 避免与残留 TUN 设备冲突。
 - 清理注册表网络设备名称列表中无用的 TUN 设备。
@@ -37,7 +23,7 @@ flowchart LR
 ## 目录结构
 
 ```
-sing-box_with_xray
+ladder
 ├── configs
 │   ├── sing-box                        # 可切换的 sing-box 配置
 │   │   ├── with_xray_ipv4_only.json
@@ -57,7 +43,7 @@ sing-box_with_xray
 │   ├── cache.db
 │   ├── libcronet.dll
 │   └── sing-box.exe
-├── sing-box_with_xray.exe              # 主程序
+├── ladder.exe                          # 主程序
 └── xray_core                           # xray 工作目录
     ├── geoip.dat
     ├── geosite.dat
@@ -65,7 +51,39 @@ sing-box_with_xray
     └── xray.exe
 ```
 
-## 配置
+## 首次使用
+
+1. 从 [Releases](https://github.com/senzyo/sing-box_with_xray/releases/latest) 下载对应架构的压缩包 (amd64 或 arm64) 。
+2. 解压后, 编辑 `configs/sing-box/*.json` 或 `configs/xray/*.json` 配置你的节点。
+3. 不要直接编辑 `configs/sing-box.json` 或 `configs/xray.json`, 防止切换配置时被覆盖。
+4. 双击 `ladder.exe` 运行, UAC 提示时选择允许 (需要管理员权限, 因为涉及上面提到的 [特性](#特性))。
+5. 在系统托盘中单击图标打开使用菜单。
+6. **默认只启用了 Xray 核心**, 你可以自行切换。
+7. 在菜单中点击 `更新核心` 来下载核心程序。
+8. 在菜单中点击 `切换配置` 来切换配置, 切换后对应的核心会被运行。
+
+## 配置文件
+### sing-box 和 Xray 的配置文件
+
+可以根据自身需求仅运行其中一个核心, 比如只用 Xray 运行 `configs\xray\olny_xray_*.json`。
+
+也可以同时运行 sing-box 和 Xray 两个核心:
+
+`configs` 目录下 `with_*.json` 的示例配置是用于双核心搭配的, 比如 `configs\sing-box\with_xray_ipv4_only.json` 和 `configs\xray\with_sing-box_[xhttp+reality].json` 这一组的分工如下:
+
+```mermaid
+flowchart LR
+    A(用户软件) --> B(sing-box)
+    B -->|直连流量| C(目标网站)
+    B -->|需代理流量| D(本地 SOCKS)
+    D --> E(Xray)
+    E --> F(VPS)
+    F --> C
+```
+
+> **要记得自定义这些配置文件, 而不是直接使用它们。**
+
+### 本程序配置文件
 
 编辑 `settings.json` 可调整以下设置:
 
@@ -80,20 +98,7 @@ sing-box_with_xray
 
 修改后需重启程序生效。`core.mode` 也可通过菜单中的"切换核心"实时切换。
 
-## 首次使用
-
-1. 从 [Releases](https://github.com/senzyo/sing-box_with_xray/releases/latest) 下载对应架构的压缩包 (amd64 或 arm64) 。
-2. 解压后, 编辑 `configs/sing-box/*.json` 和 `configs/xray/*.json` 配置你的节点。
-3. 不要直接编辑 `configs/sing-box.json` 和 `configs/xray.json`, 防止切换配置时被覆盖。
-4. 双击 `sing-box_with_xray.exe` 运行, UAC 提示时选择允许。
-5. 在系统托盘中单击图标打开使用菜单。
-6. 在菜单中点击 `更新核心` 来下载核心程序。
-7. 在菜单中点击 `切换配置` 来切换配置, 切换后对应的核心会被运行。
-
-程序需要管理员权限, 因为 sing-box TUN 和 DNS 缓存清理需要提升权限。
-
 ## 开发
-
 ### 依赖
 
 - Rust stable toolchain
@@ -121,8 +126,8 @@ cmd /c "`"C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxi
 产出路径:
 
 ```text
-target\release\sing-box_with_xray.exe                           # amd64
-target\aarch64-pc-windows-msvc\release\sing-box_with_xray.exe   # arm64
+target\release\ladder.exe                           # amd64
+target\aarch64-pc-windows-msvc\release\ladder.exe   # arm64
 ```
 
 ### CI/CD

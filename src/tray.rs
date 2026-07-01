@@ -60,7 +60,7 @@ pub const ID_XRAY_CONFIG_BASE: u16 = 2000;
 pub unsafe fn create_window(h_instance: isize) -> Result<isize, AppError> {
     unsafe {
         let h_instance = HINSTANCE(h_instance as _);
-        let class_name = state::wide("SingBoxWithXrayTrayWindow");
+        let class_name = state::wide("LadderTrayWindow");
 
         let wnd_class = WNDCLASSW {
             style: CS_HREDRAW | CS_VREDRAW,
@@ -74,7 +74,7 @@ pub unsafe fn create_window(h_instance: isize) -> Result<isize, AppError> {
             return Err(AppError::Msg("注册托盘窗口类失败".into()));
         }
 
-        let title = state::wide("sing-box_with_xray");
+        let title = state::wide("ladder");
         let hwnd = CreateWindowExW(
             Default::default(),
             PCWSTR(class_name.as_ptr()),
@@ -111,7 +111,7 @@ pub unsafe fn add_icon(hwnd: isize, h_instance: isize, exe_dir: &Path) -> Result
             uFlags: NIF_MESSAGE | NIF_ICON | NIF_TIP,
             uCallbackMessage: WM_TRAY_ICON,
             hIcon: icon,
-            szTip: to_wide_padded("sing-box_with_xray"),
+            szTip: to_wide_padded("ladder"),
             ..Default::default()
         };
 
@@ -445,9 +445,8 @@ unsafe fn show_tray_menu(hwnd: HWND) -> (u16, HashMap<u16, ConfigAction>) {
             core_mode == CoreMode::Both,
         );
         append_submenu(menu, switch_menu, "切换核心");
-
-        append_separator(menu);
         append_item(menu, ID_OPEN_DIR, "打开程序目录");
+        append_separator(menu);
         append_item(menu, ID_EXIT, "退出并终止");
 
         let mut point = POINT::default();
