@@ -11,12 +11,15 @@ use crate::process;
 
 const TASK_NAME: &str = "Reset_DNS_On_Boot";
 
-const TASK_XML: &str = r#"<Task version="1.2"
-  xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+const TASK_XML: &str = r#"<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo>
+    <Author>ladder</Author>
+    <Description>Restore the DNS server address of the physical network adapter to DHCP</Description>
+    <URI>\Reset_DNS_On_Boot</URI>
+  </RegistrationInfo>
   <Triggers>
     <BootTrigger>
       <Enabled>true</Enabled>
-      <Delay>PT10S</Delay>
     </BootTrigger>
   </Triggers>
   <Principals>
@@ -36,12 +39,12 @@ const TASK_XML: &str = r#"<Task version="1.2"
       <StopOnIdleEnd>false</StopOnIdleEnd>
       <RestartOnIdle>false</RestartOnIdle>
     </IdleSettings>
-    <AllowStartOnDemand>true</AllowStartOnDemand>
+    <AllowStartOnDemand>false</AllowStartOnDemand>
     <Enabled>true</Enabled>
     <Hidden>false</Hidden>
     <RunOnlyIfIdle>false</RunOnlyIfIdle>
     <WakeToRun>false</WakeToRun>
-    <ExecutionTimeLimit>PT1M</ExecutionTimeLimit>
+    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
     <Priority>7</Priority>
   </Settings>
   <Actions Context="Author">
