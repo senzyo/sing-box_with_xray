@@ -158,8 +158,7 @@ impl Settings {
     /// 将当前配置写入 `exe_dir/settings.json`。
     pub fn save(&self, exe_dir: &Path) -> Result<(), AppError> {
         let path = exe_dir.join("settings.json");
-        let json = serde_json::to_string_pretty(self)
-            .map_err(|e| AppError::Msg(format!("序列化配置失败: {e}")))?;
+        let json = serde_json::to_string_pretty(self).map_err(|e| AppError::Msg(format!("序列化配置失败: {e}")))?;
         std::fs::write(&path, json).map_err(|e| AppError::Msg(format!("写入配置文件失败: {e}")))
     }
 

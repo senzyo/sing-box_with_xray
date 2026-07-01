@@ -117,7 +117,7 @@ fn format_utc_timestamp() -> String {
 ///
 /// 1. 为 Windows 控制台启用 ANSI 转义码支持（彩色输出）
 /// 2. 创建 console_layer（stderr）和 file_layer（app.log）
-/// 3. 日志级别优先使用 RUST_LOG 环境变量，否则使用 settings.toml 中的配置
+/// 3. 日志级别优先使用 RUST_LOG 环境变量，否则使用 settings.json 中的配置
 fn init_logging(exe_dir: &Path, log_level: &str) -> Result<(), AppError> {
     unsafe {
         if let Ok(handle) = GetStdHandle(STD_ERROR_HANDLE) {

@@ -68,7 +68,7 @@ jobs:
           $dir = "sing-box_with_xray-amd64-v$ver"
           New-Item -ItemType Directory $dir
           Copy-Item target\release\sing-box_with_xray.exe $dir\
-          Copy-Item target\release\settings.toml $dir\
+          Copy-Item target\release\settings.json $dir\
           Copy-Item -Recurse target\release\configs $dir\
           Copy-Item -Recurse target\release\icons $dir\
           Copy-Item target\release\README.md $dir\
@@ -83,7 +83,7 @@ jobs:
           $dir = "sing-box_with_xray-arm64-v$ver"
           New-Item -ItemType Directory $dir
           Copy-Item target\aarch64-pc-windows-msvc\release\sing-box_with_xray.exe $dir\
-          Copy-Item target\aarch64-pc-windows-msvc\release\settings.toml $dir\
+          Copy-Item target\aarch64-pc-windows-msvc\release\settings.json $dir\
           Copy-Item -Recurse target\aarch64-pc-windows-msvc\release\configs $dir\
           Copy-Item -Recurse target\aarch64-pc-windows-msvc\release\icons $dir\
           Copy-Item target\aarch64-pc-windows-msvc\release\README.md $dir\

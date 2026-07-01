@@ -91,7 +91,7 @@ function Package-Arch {
 
     New-Item -ItemType Directory $outDir | Out-Null
     Copy-Item $exe $outDir\
-    Copy-Item (Join-Path $TargetDir "settings.toml") $outDir\
+    Copy-Item (Join-Path $TargetDir "settings.json") $outDir\
     Copy-Item -Recurse (Join-Path $TargetDir "configs") $outDir\
     Copy-Item -Recurse (Join-Path $TargetDir "icons") $outDir\
     Copy-Item (Join-Path $TargetDir "README.md") $outDir\

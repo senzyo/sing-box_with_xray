@@ -52,7 +52,7 @@ sing-box_with_xray
 │   ├── ladder.ico                      # 托盘和通知的应用图标
 │   ├── red_circle.ico                  # 核心程序未安装的应用图标
 │   └── yellow_circle.ico               # 核心程序未运行的应用图标
-├── settings.toml                       # 主程序配置
+├── settings.json                       # 主程序配置
 ├── sing-box_core                       # sing-box 工作目录
 │   ├── cache.db
 │   ├── libcronet.dll
@@ -67,17 +67,18 @@ sing-box_with_xray
 
 ## 配置
 
-编辑 `settings.toml` 可调整以下设置:
+编辑 `settings.json` 可调整以下设置:
 
-| 配置项                      | 默认值                  | 说明                     |
-| --------------------------- | ----------------------- | ------------------------ |
-| `gh_proxy.enabled`          | `true`                  | 是否启用 GitHub CDN 代理 |
-| `gh_proxy.url`              | `https://gh-proxy.com/` | GitHub CDN 代理地址前缀  |
-| `log.level`                 | `debug`                 | 日志级别                 |
-| `download.max_retries`      | `3`                     | 下载重试次数             |
-| `download.retry_delay_secs` | `2`                     | 重试间隔 (秒)            |
+| 配置项                      | 默认值                  | 说明                                    |
+| --------------------------- | ----------------------- | --------------------------------------- |
+| `gh_proxy.enabled`          | `true`                  | 是否启用 GitHub CDN 代理                |
+| `gh_proxy.url`              | `https://gh-proxy.com/` | GitHub CDN 代理地址前缀                 |
+| `log.level`                 | `debug`                 | 日志级别                                |
+| `download.max_retries`      | `3`                     | 下载重试次数                            |
+| `download.retry_delay_secs` | `2`                     | 重试间隔 (秒)                           |
+| `core.mode`                 | `xray`                  | 核心模式 (`xray` / `sing-box` / `both`) |
 
-修改后需重启程序生效。
+修改后需重启程序生效。`core.mode` 也可通过菜单中的"切换核心"实时切换。
 
 ## 首次使用
 
@@ -86,8 +87,8 @@ sing-box_with_xray
 3. 不要直接编辑 `configs/sing-box.json` 和 `configs/xray.json`, 防止切换配置时被覆盖。
 4. 双击 `sing-box_with_xray.exe` 运行, UAC 提示时选择允许。
 5. 在系统托盘中单击图标打开使用菜单。
-6. 点击 `更新核心` -> `更新 XX` 来下载核心程序。
-7. 点击 `切换 XX 配置` 来切换配置, 切换后对应的核心会被运行。
+6. 在菜单中点击 `更新核心` 来下载核心程序。
+7. 在菜单中点击 `切换配置` 来切换配置, 切换后对应的核心会被运行。
 
 程序需要管理员权限, 因为 sing-box TUN 和 DNS 缓存清理需要提升权限。
 

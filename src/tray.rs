@@ -388,26 +388,25 @@ unsafe fn show_tray_menu(hwnd: HWND) -> (u16, HashMap<u16, ConfigAction>) {
             append_submenu(menu, xray_menu, "切换 xray 配置");
         } else {
             // 单核模式：操作项为直接可点击的一级菜单
-            let (restart_id, stop_id, update_id, config_kind, config_base, config_dir) =
-                if core_mode.runs_xray() {
-                    (
-                        ID_RESTART_XRAY,
-                        ID_STOP_XRAY,
-                        ID_UPDATE_XRAY,
-                        ConfigKind::Xray,
-                        ID_XRAY_CONFIG_BASE,
-                        exe_dir.join("configs").join("xray"),
-                    )
-                } else {
-                    (
-                        ID_RESTART_SING,
-                        ID_STOP_SING,
-                        ID_UPDATE_SING,
-                        ConfigKind::SingBox,
-                        ID_SING_CONFIG_BASE,
-                        exe_dir.join("configs").join("sing-box"),
-                    )
-                };
+            let (restart_id, stop_id, update_id, config_kind, config_base, config_dir) = if core_mode.runs_xray() {
+                (
+                    ID_RESTART_XRAY,
+                    ID_STOP_XRAY,
+                    ID_UPDATE_XRAY,
+                    ConfigKind::Xray,
+                    ID_XRAY_CONFIG_BASE,
+                    exe_dir.join("configs").join("xray"),
+                )
+            } else {
+                (
+                    ID_RESTART_SING,
+                    ID_STOP_SING,
+                    ID_UPDATE_SING,
+                    ConfigKind::SingBox,
+                    ID_SING_CONFIG_BASE,
+                    exe_dir.join("configs").join("sing-box"),
+                )
+            };
 
             append_item(menu, restart_id, "重新启动");
             append_item(menu, stop_id, "终止运行");
@@ -427,9 +426,24 @@ unsafe fn show_tray_menu(hwnd: HWND) -> (u16, HashMap<u16, ConfigAction>) {
         // ── 切换核心子菜单（始终显示） ──
         append_separator(menu);
         let switch_menu = new_submenu();
-        append_item_or_disabled(switch_menu, ID_SWITCH_CORE_XRAY, "仅用 xray", core_mode == CoreMode::Xray);
-        append_item_or_disabled(switch_menu, ID_SWITCH_CORE_SING, "仅用 sing-box", core_mode == CoreMode::SingBox);
-        append_item_or_disabled(switch_menu, ID_SWITCH_CORE_BOTH, "全部启用", core_mode == CoreMode::Both);
+        append_item_or_disabled(
+            switch_menu,
+            ID_SWITCH_CORE_XRAY,
+            "仅用 xray",
+            core_mode == CoreMode::Xray,
+        );
+        append_item_or_disabled(
+            switch_menu,
+            ID_SWITCH_CORE_SING,
+            "仅用 sing-box",
+            core_mode == CoreMode::SingBox,
+        );
+        append_item_or_disabled(
+            switch_menu,
+            ID_SWITCH_CORE_BOTH,
+            "全部启用",
+            core_mode == CoreMode::Both,
+        );
         append_submenu(menu, switch_menu, "切换核心");
 
         append_separator(menu);

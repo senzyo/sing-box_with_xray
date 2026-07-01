@@ -47,10 +47,10 @@ fn main() {
             .and_then(|p| p.parent())
             .expect("failed to resolve target profile dir");
 
-        // 将图标、配置、settings.toml 复制到输出目录，使可执行文件能通过相对路径访问
+        // 将图标、配置、settings.json 复制到输出目录，使可执行文件能通过相对路径访问
         copy_dir(std::path::Path::new("icons"), &profile_dir.join("icons"));
         copy_dir(std::path::Path::new("configs"), &profile_dir.join("configs"));
-        let _ = std::fs::copy("settings.toml", profile_dir.join("settings.toml"));
+        let _ = std::fs::copy("settings.json", profile_dir.join("settings.json"));
         let _ = std::fs::copy("README.md", profile_dir.join("README.md"));
         let _ = std::fs::copy("LICENSE", profile_dir.join("LICENSE"));
     }
