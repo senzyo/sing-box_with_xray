@@ -5,7 +5,7 @@
 
 use std::fs;
 use std::path::Path;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use crate::process;
 
@@ -54,14 +54,29 @@ const TASK_XML: &str = r#"<Task version="1.2"
 
 /// 确保开机恢复 DNS 的任务计划已注册。
 ///
-/// 幂等操作：`/F` 参数覆盖已有任务。失败仅记录警告，不阻断启动流程。
+/// 先查询任务是否已存在，不存在才创建。失败仅记录警告，不阻断启动流程。
 pub fn ensure_boot_dns_reset_task(exe_dir: &Path) {
     if let Err(e) = register_task(exe_dir) {
         warn!("注册开机 DNS 恢复任务失败: {e}");
     }
 }
 
+fn task_exists() -> bool {
+    process::hidden_command("schtasks")
+        .args(["/Query", "/TN", TASK_NAME])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
 fn register_task(exe_dir: &Path) -> Result<(), String> {
+    if task_exists() {
+        debug!("开机 DNS 恢复任务已存在，跳过注册");
+        return Ok(());
+    }
+
     let xml_path = exe_dir.join("_dns_task.xml");
     fs::write(&xml_path, TASK_XML)
         .map_err(|e| format!("写入任务 XML 失败: {e}"))?;
